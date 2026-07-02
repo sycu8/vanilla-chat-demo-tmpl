@@ -1,9 +1,9 @@
 /**
- * Simulation engine — generates realistic recon data for any domain.
+ * Simulation engine — OSINT/CVE phases use seeded data; subdomains are live (crt.sh + DNS).
  *
  * PRODUCTION EXTENSION POINTS:
  * - Replace OSINT phase with Hunter.io, LinkedIn scraping APIs, Shodan
- * - Replace subdomain enum with crt.sh, SecurityTrails, subfinder
+ * - Add SecurityTrails, subfinder for additional subdomain sources
  * - Replace fingerprinting with Wappalyzer API, httpx, nuclei
  * - Replace CVE matching with NVD API, Vulners, OSV
  */
@@ -11,6 +11,7 @@
 import { createRng, domainSeed, extractDomain } from "../lib/domain";
 import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
+import { enumerateSubdomains } from "./subdomain";
 import type {
   LogEntry,
   OsintFinding,
@@ -30,26 +31,6 @@ const PHASES = [
   { id: 4, name: "Vulnerability Intelligence" },
   { id: 5, name: "Intelligence Synthesis" },
 ];
-
-const SUBDOMAIN_PREFIXES = [
-  "api", "admin", "dev", "staging", "mail", "vpn", "portal", "cdn",
-  "app", "beta", "internal", "jenkins", "grafana", "kibana", "docs",
-  "status", "auth", "sso", "backup", "db", "redis", "elastic",
-  "gitlab", "jira", "confluence", "wiki", "support", "help",
-];
-
-const SERVICES_MAP: Record<string, string[]> = {
-  api: ["REST API", "GraphQL", "Swagger UI"],
-  admin: ["Admin Panel", "phpMyAdmin", "cPanel"],
-  dev: ["Dev Environment", "Debug Endpoints"],
-  staging: ["Staging App", "Test Data"],
-  mail: ["SMTP", "Webmail", "Exchange"],
-  vpn: ["OpenVPN", "WireGuard", "Cisco AnyConnect"],
-  portal: ["Employee Portal", "SSO"],
-  jenkins: ["CI/CD", "Build Artifacts"],
-  grafana: ["Monitoring", "Metrics Dashboard"],
-  default: ["HTTPS", "HTTP Redirect"],
-};
 
 const SERVERS = ["nginx/1.24.0", "Apache/2.4.57", "cloudflare", "Microsoft-IIS/10.0", "Caddy/2.7.0"];
 const FRAMEWORKS = ["React 18.2", "Next.js 14.1", "Django 4.2", "Laravel 10", "Express 4.18", "Spring Boot 3.2", "Ruby on Rails 7.1"];
@@ -153,41 +134,6 @@ function generateOsint(
   }
 
   return findings;
-}
-
-function generateSubdomains(
-  domain: string,
-  depth: ScanDepth,
-  rng: ReturnType<typeof createRng>
-): SubdomainEntry[] {
-  const count = depth === "deep" ? rng.int(12, 20) : rng.int(6, 10);
-  const prefixes = rng.shuffle(SUBDOMAIN_PREFIXES).slice(0, count);
-  const entries: SubdomainEntry[] = [
-    {
-      host: domain,
-      services: ["Primary Website", "HTTPS"],
-      ip: `${rng.int(13, 104)}.${rng.int(0, 255)}.${rng.int(0, 255)}.${rng.int(1, 254)}`,
-      status: 200,
-    },
-    {
-      host: `www.${domain}`,
-      services: ["WWW Redirect", "CDN"],
-      ip: `${rng.int(13, 104)}.${rng.int(0, 255)}.${rng.int(0, 255)}.${rng.int(1, 254)}`,
-      status: 301,
-    },
-  ];
-
-  for (const prefix of prefixes) {
-    const services = SERVICES_MAP[prefix] || SERVICES_MAP.default;
-    entries.push({
-      host: `${prefix}.${domain}`,
-      services: rng.shuffle(services).slice(0, rng.int(1, 2)),
-      ip: `${rng.int(13, 104)}.${rng.int(0, 255)}.${rng.int(0, 255)}.${rng.int(1, 254)}`,
-      status: rng.pick([200, 200, 200, 301, 403, 401, 503]),
-    });
-  }
-
-  return entries;
 }
 
 function generateFingerprints(
@@ -328,22 +274,39 @@ export async function* runReconScan(
     type: "phase",
     data: { phase: 2, name: PHASES[1].name, status: "running", progress: 20 },
   };
-  yield { type: "log", data: log(2, "info", "[SIM] Starting subdomain enumeration (crt.sh, DNS brute)...") };
-  await delay(400);
-  yield { type: "log", data: log(2, "info", `Scan depth: ${request.depth.toUpperCase()} — expanded wordlist loaded`) };
-  await delay(350);
+  yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (crt.sh, DNS verify, HTTP probe)...") };
+  await delay(200);
 
-  const subdomains = generateSubdomains(domain, request.depth, rng);
+  yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (crt.sh, DNS verify, HTTP probe)...") };
+  await delay(200);
+
+  const pendingLogs: string[] = [];
+  const subdomains = await enumerateSubdomains(domain, {
+    depth: request.depth,
+    onCandidate: (message) => pendingLogs.push(message),
+  });
+
+  for (const message of pendingLogs) {
+    yield { type: "log", data: log(2, "info", message) };
+  }
+
   for (const sub of subdomains) {
     yield {
       type: "log",
       data: log(
         2,
-        sub.status === 403 ? "warn" : "success",
-        `Found ${sub.host} → ${sub.ip} [${sub.services.join(", ")}] HTTP ${sub.status}`
+        sub.status >= 400 ? "warn" : "success",
+        `Alive ${sub.host} → ${sub.ip} [${sub.services.join(", ")}] HTTP ${sub.status}`
       ),
     };
-    await delay(150);
+    await delay(80);
+  }
+
+  if (!subdomains.length) {
+    yield {
+      type: "log",
+      data: log(2, "warn", `No resolvable subdomains found for ${domain}`),
+    };
   }
 
   yield {
@@ -418,7 +381,7 @@ export async function* runReconScan(
   }
 
   const completedAt = now();
-  const summary = `Reconnaissance of ${domain} identified ${subdomains.length} hosts, ${vulnerabilities.filter((v) => v.severity === "high").length} critical vulnerabilities, and a composite risk score of ${riskScore}/100. ${request.simulation ? "Results generated in simulation mode." : "Live scan complete."}`;
+  const summary = `Reconnaissance of ${domain} identified ${subdomains.length} live hosts (DNS-verified), ${vulnerabilities.filter((v) => v.severity === "high").length} critical vulnerabilities, and a composite risk score of ${riskScore}/100. ${request.simulation ? "OSINT/CVE phases use simulation data." : "Live scan complete."}`;
 
   let report: ReconReport = {
     id: scanId,
@@ -457,12 +420,12 @@ export async function* runReconScan(
   yield { type: "complete", data: slimReport };
 }
 
-/** Generate report synchronously (for regenerate mindmap endpoint) */
-export function buildReportFromRequest(request: ScanRequest): ReconReport {
+/** Generate report (for regenerate mindmap / report endpoints) */
+export async function buildReportFromRequest(request: ScanRequest): Promise<ReconReport> {
   const domain = extractDomain(request.target);
   const rng = createRng(domainSeed(domain));
   const osint = generateOsint(domain, request.keywords, rng);
-  const subdomains = generateSubdomains(domain, request.depth, rng);
+  const subdomains = await enumerateSubdomains(domain, { depth: request.depth });
   const fingerprints = generateFingerprints(subdomains, rng);
   const vulnerabilities = generateVulnerabilities(fingerprints, request.depth, rng);
   const riskScore = calculateRiskScore(vulnerabilities, subdomains);

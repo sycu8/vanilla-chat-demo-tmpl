@@ -103,7 +103,7 @@ recon.post("/mindmap", async (c) => {
 
   const raw = body as Record<string, unknown>;
   const variant = Number(raw.variant) || 0;
-  const report = buildReportFromRequest(parsed);
+  const report = await buildReportFromRequest(parsed);
   const mindmap = regenerateMindmap(report, variant);
 
   return c.json({ mindmap, report });
@@ -126,7 +126,7 @@ recon.post("/report", async (c) => {
     return c.json({ error: parsed.error }, 400);
   }
 
-  const report = buildReportFromRequest(parsed);
+  const report = await buildReportFromRequest(parsed);
   return c.json({ report });
 });
 

@@ -6,6 +6,8 @@
 
 const BASE = process.argv[2] || "http://localhost:8788";
 const TARGET = "orangecloud.vn";
+/** Known live subdomains for orangecloud.vn (from CT / passive DNS) */
+const KNOWN_LIVE_HOSTS = ["ask.orangecloud.vn", "blog.orangecloud.vn", "kb.orangecloud.vn"];
 const PAYLOAD = {
   target: TARGET,
   keywords: "orange,cloud,vietnam",
@@ -54,8 +56,18 @@ async function testReport() {
   if (!report.mindmap?.includes("orangecloud.vn")) return fail("report", "mindmap missing domain");
   if (!report.markdown?.includes("orangecloud.vn")) return fail("report", "markdown missing domain");
   if (!report.html?.includes("orangecloud.vn")) return fail("report", "html missing domain");
-  if (report.subdomains.length < 3) return fail("report", "too few subdomains");
-  ok(`POST /api/recon/report (${report.subdomains.length} subdomains, risk ${report.riskScore})`);
+  if (report.subdomains.length < 2) return fail("report", "too few live subdomains");
+  const hosts = report.subdomains.map((s) => s.host);
+  const hasKnown = KNOWN_LIVE_HOSTS.some((h) => hosts.includes(h));
+  if (!hasKnown) {
+    return fail("report", `expected known live host in [${hosts.join(", ")}]`);
+  }
+  const fakeOnly = hosts.every((h) => /^(api|admin|jenkins|grafana)\./.test(h));
+  if (fakeOnly) return fail("report", "subdomains look simulated, not live");
+  for (const sub of report.subdomains) {
+    if (!sub.ip || sub.ip === "0.0.0.0") return fail("report", `${sub.host} missing IP`);
+  }
+  ok(`POST /api/recon/report (${report.subdomains.length} live subdomains, risk ${report.riskScore})`);
   return report;
 }
 
