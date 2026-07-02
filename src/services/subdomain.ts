@@ -143,25 +143,6 @@ async function probeHttp(host: string): Promise<number> {
   return 0;
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let index = 0;
-
-  async function worker() {
-    while (index < items.length) {
-      const i = index++;
-      results[i] = await fn(items[i]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
-}
-
 function sortHosts(hosts: string[], domain: string): string[] {
   const rank = (host: string) => {
     if (host === domain) return 0;
@@ -178,6 +159,65 @@ export interface EnumerateOptions {
   depth: ScanDepth;
   onCandidate?: (message: string) => void;
   onVerified?: (entry: SubdomainEntry) => void;
+  onProgress?: (current: number, total: number, host: string, state: "checking" | "alive" | "dead") => void;
+}
+
+export type SubdomainStreamEvent =
+  | { kind: "status"; message: string }
+  | { kind: "progress"; current: number; total: number; host: string; state: "checking" | "alive" | "dead" }
+  | { kind: "verified"; entry: SubdomainEntry };
+
+/** Stream subdomain discovery with incremental progress events. */
+export async function* enumerateSubdomainsStream(
+  domain: string,
+  options: Pick<EnumerateOptions, "depth">
+): AsyncGenerator<SubdomainStreamEvent> {
+  const maxHosts = options.depth === "deep" ? 60 : 25;
+  const candidates = new Set<string>([domain, `www.${domain}`]);
+
+  yield { kind: "status", message: `Querying Certificate Transparency (crt.sh) for ${domain}...` };
+  const crtHosts = await fetchCrtShHosts(domain);
+  for (const host of crtHosts) candidates.add(host);
+  yield { kind: "status", message: `crt.sh returned ${crtHosts.size} certificate hostnames` };
+
+  if (candidates.size < 5) {
+    yield { kind: "status", message: "Supplementing with passive DNS (hackertarget)..." };
+    const htHosts = await fetchHackerTargetHosts(domain);
+    for (const host of htHosts) candidates.add(host);
+    yield { kind: "status", message: `Passive DNS added ${htHosts.size} candidates` };
+  }
+
+  const sorted = sortHosts([...candidates], domain).slice(0, maxHosts * 3);
+  const total = sorted.length;
+  yield { kind: "status", message: `Verifying ${total} candidate hosts via DNS + HTTP...` };
+
+  const alive: SubdomainEntry[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const host = sorted[i];
+    const current = i + 1;
+    yield { kind: "progress", current, total, host, state: "checking" };
+
+    const ip = await resolveDns(host);
+    if (!ip) {
+      yield { kind: "progress", current, total, host, state: "dead" };
+      continue;
+    }
+
+    const status = await probeHttp(host);
+    const entry: SubdomainEntry = {
+      host,
+      ip,
+      status: status || 200,
+      services: inferServices(host, domain),
+    };
+    alive.push(entry);
+    yield { kind: "progress", current, total, host, state: "alive" };
+    yield { kind: "verified", entry };
+
+    if (alive.length >= maxHosts) break;
+  }
+
+  yield { kind: "status", message: `Enumeration complete — ${alive.length} live host(s) found` };
 }
 
 /**
@@ -188,37 +228,14 @@ export async function enumerateSubdomains(
   domain: string,
   options: EnumerateOptions
 ): Promise<SubdomainEntry[]> {
-  const maxHosts = options.depth === "deep" ? 60 : 25;
-  const candidates = new Set<string>([domain, `www.${domain}`]);
-
-  options.onCandidate?.(`Querying Certificate Transparency (crt.sh) for ${domain}...`);
-  const crtHosts = await fetchCrtShHosts(domain);
-  for (const host of crtHosts) candidates.add(host);
-
-  if (candidates.size < 5) {
-    options.onCandidate?.(`Supplementing with passive DNS (hackertarget)...`);
-    const htHosts = await fetchHackerTargetHosts(domain);
-    for (const host of htHosts) candidates.add(host);
+  const entries: SubdomainEntry[] = [];
+  for await (const event of enumerateSubdomainsStream(domain, options)) {
+    if (event.kind === "status") options.onCandidate?.(event.message);
+    if (event.kind === "progress") options.onProgress?.(event.current, event.total, event.host, event.state);
+    if (event.kind === "verified") {
+      entries.push(event.entry);
+      options.onVerified?.(event.entry);
+    }
   }
-
-  const sorted = sortHosts([...candidates], domain).slice(0, maxHosts * 3);
-  options.onCandidate?.(`Verifying ${sorted.length} candidate hosts via DNS + HTTP...`);
-
-  const verified = await mapWithConcurrency(sorted, 6, async (host) => {
-    const ip = await resolveDns(host);
-    if (!ip) return null;
-
-    const status = await probeHttp(host);
-    const entry: SubdomainEntry = {
-      host,
-      ip,
-      status: status || 200,
-      services: inferServices(host, domain),
-    };
-    options.onVerified?.(entry);
-    return entry;
-  });
-
-  const alive = verified.filter((e): e is SubdomainEntry => e !== null);
-  return alive.slice(0, maxHosts);
+  return entries;
 }

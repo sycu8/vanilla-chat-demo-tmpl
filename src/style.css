@@ -56,13 +56,30 @@
            bg-forge-surface transition-all duration-300;
   }
 
+  .phase-indicator.pending {
+    @apply opacity-60;
+  }
+
   .phase-indicator.active {
-    @apply border-forge-accent bg-forge-accent/5 shadow-forge;
+    @apply border-forge-accent bg-forge-accent/5 shadow-forge opacity-100;
   }
 
   .phase-indicator.complete {
-    @apply border-forge-safe/50 bg-forge-safe/5;
+    @apply border-forge-safe/50 bg-forge-safe/5 opacity-100;
   }
+
+  .phase-indicator.error {
+    @apply border-forge-danger/50 bg-forge-danger/5 opacity-100;
+  }
+
+  .phase-spinner {
+    @apply inline-block w-3.5 h-3.5 border-2 border-forge-accent/30 border-t-forge-accent rounded-full animate-spin shrink-0;
+  }
+
+  .phase-status-pending { @apply text-forge-muted; }
+  .phase-status-running { @apply text-forge-accent font-semibold; }
+  .phase-status-complete { @apply text-forge-safe font-semibold; }
+  .phase-status-error { @apply text-forge-danger font-semibold; }
 
   .log-entry {
     @apply font-mono text-xs py-1 px-2 rounded;
@@ -102,6 +119,21 @@
   .scan-progress-fill {
     @apply h-full bg-gradient-to-r from-forge-accent2 to-forge-accent rounded-full
            transition-all duration-500 ease-out;
+  }
+
+  .scan-progress-fill.indeterminate {
+    @apply w-1/3 animate-pulse;
+    animation: scan-indeterminate 1.5s ease-in-out infinite;
+  }
+
+  @keyframes scan-indeterminate {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(200%); }
+    100% { transform: translateX(-100%); }
+  }
+
+  .scan-activity-dot {
+    @apply w-2 h-2 rounded-full bg-forge-accent animate-pulse;
   }
 
   #mindmap-container svg {

@@ -79,6 +79,8 @@ export interface ReconReport {
 export interface PhaseEvent {
   phase: number;
   name: string;
-  status: "running" | "complete";
+  status: "pending" | "running" | "complete" | "error";
   progress: number;
+  /** Short activity line shown while phase is running (e.g. "Verifying host 3/25") */
+  detail?: string;
 }

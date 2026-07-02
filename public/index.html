@@ -134,14 +134,21 @@
     <section id="section-pipeline" class="hidden space-y-6 mt-8">
       <!-- Progress Header -->
       <div class="forge-card">
-        <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center justify-between mb-2 gap-4">
           <h3 class="text-lg font-bold text-forge-text">
             Recon Pipeline — <span id="scan-target-label" class="text-forge-accent2 font-mono"></span>
           </h3>
-          <span id="scan-progress-text" class="text-sm font-mono text-forge-muted">0%</span>
+          <div class="flex items-center gap-3 shrink-0">
+            <span id="scan-elapsed" class="text-xs font-mono text-forge-muted hidden">0:00</span>
+            <span id="scan-progress-text" class="text-sm font-mono text-forge-muted">0%</span>
+          </div>
         </div>
-        <div class="scan-progress-bar">
+        <div class="scan-progress-bar mb-3">
           <div id="scan-progress-fill" class="scan-progress-fill" style="width: 0%"></div>
+        </div>
+        <div id="scan-activity-row" class="flex items-center gap-2 text-sm min-h-[1.5rem]">
+          <span id="scan-activity-dot" class="scan-activity-dot hidden"></span>
+          <span id="scan-activity-status" class="text-forge-muted">Waiting to start...</span>
         </div>
       </div>
 
@@ -155,14 +162,20 @@
         <div class="lg:col-span-2 forge-card flex flex-col h-[420px]">
           <div class="flex items-center justify-between mb-3">
             <h4 class="text-sm font-semibold text-forge-accent2 uppercase tracking-wider">Live Feed</h4>
-            <div class="flex gap-1">
-              <span class="w-3 h-3 rounded-full bg-forge-danger/60"></span>
-              <span class="w-3 h-3 rounded-full bg-forge-warn/60"></span>
-              <span class="w-3 h-3 rounded-full bg-forge-safe/60"></span>
+            <div class="flex items-center gap-3">
+              <span id="log-count" class="text-xs font-mono text-forge-muted">0 events</span>
+              <div class="flex gap-1">
+                <span class="w-3 h-3 rounded-full bg-forge-danger/60"></span>
+                <span class="w-3 h-3 rounded-full bg-forge-warn/60"></span>
+                <span class="w-3 h-3 rounded-full bg-forge-safe/60"></span>
+              </div>
             </div>
           </div>
-          <div id="log-terminal" class="flex-1 overflow-y-auto bg-forge-bg rounded-lg border border-forge-border p-3 font-mono text-xs space-y-0.5">
-            <!-- Logs appended here -->
+          <div id="log-terminal" class="flex-1 overflow-y-auto bg-forge-bg rounded-lg border border-forge-border p-3 font-mono text-xs space-y-0.5 relative">
+            <div id="log-waiting" class="hidden absolute bottom-2 right-3 flex items-center gap-2 text-forge-accent text-xs bg-forge-surface/90 px-2 py-1 rounded border border-forge-border">
+              <span class="phase-spinner"></span>
+              <span>Processing...</span>
+            </div>
           </div>
         </div>
       </div>

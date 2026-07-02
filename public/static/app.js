@@ -7,6 +7,20 @@
 let currentReport = null;
 let lastScanPayload = null;
 let mindmapVariant = 0;
+let scanRunning = false;
+let currentRunningPhase = 0;
+let logEventCount = 0;
+let scanStartedAt = 0;
+let elapsedTimer = null;
+let activityTimer = null;
+let lastEventAt = 0;
+
+const PHASE_STATUS = {
+  pending: { label: "pending", className: "phase-status-pending" },
+  running: { label: "running", className: "phase-status-running" },
+  complete: { label: "done", className: "phase-status-complete" },
+  error: { label: "error", className: "phase-status-error" },
+};
 
 const PHASES = [
   { id: 1, name: "OSINT & Social Engineering", icon: "🔍" },
@@ -34,6 +48,12 @@ const reportContent = $("#report-content");
 const riskDashboard = $("#risk-dashboard");
 const statusBadge = $("#status-badge");
 const btnNewScan = $("#btn-new-scan");
+const scanActivityStatus = $("#scan-activity-status");
+const scanActivityDot = $("#scan-activity-dot");
+const scanElapsed = $("#scan-elapsed");
+const logCount = $("#log-count");
+const logWaiting = $("#log-waiting");
+const progressFill = $("#scan-progress-fill");
 
 // ── Mermaid Init ────────────────────────────────────────────────────
 if (typeof mermaid !== "undefined") {
@@ -97,31 +117,105 @@ function riskBadgeClass(level) {
 function initPhaseIndicators() {
   phaseIndicators.innerHTML = PHASES.map(
     (p) => `
-    <div class="phase-indicator" id="phase-${p.id}" data-phase="${p.id}">
-      <span class="text-lg">${p.icon}</span>
+    <div class="phase-indicator pending" id="phase-${p.id}" data-phase="${p.id}">
+      <span class="phase-icon text-lg" aria-hidden="true">${p.icon}</span>
       <div class="flex-1 min-w-0">
         <div class="text-xs text-forge-muted">Phase ${p.id}</div>
-        <div class="text-sm font-medium truncate">${p.name}</div>
+        <div class="text-sm font-medium truncate phase-name">${p.name}</div>
+        <div class="text-xs text-forge-muted truncate phase-detail hidden"></div>
       </div>
-      <span class="phase-status text-xs text-forge-muted">pending</span>
+      <span class="phase-status phase-status-pending text-xs">pending</span>
     </div>`
   ).join("");
 }
 
-function updatePhase(phaseId, status) {
+function updatePhase(phaseId, status, detail = "") {
   const el = $(`#phase-${phaseId}`);
   if (!el) return;
-  el.classList.remove("active", "complete");
+
+  el.classList.remove("pending", "active", "complete", "error");
   const statusEl = el.querySelector(".phase-status");
-  if (status === "running") {
+  const detailEl = el.querySelector(".phase-detail");
+  const iconEl = el.querySelector(".phase-icon");
+  const meta = PHASE_STATUS[status] || PHASE_STATUS.pending;
+
+  if (status === "pending") {
+    el.classList.add("pending");
+    statusEl.textContent = "pending";
+    statusEl.className = "phase-status phase-status-pending text-xs";
+    if (iconEl) iconEl.innerHTML = PHASES[phaseId - 1]?.icon || "○";
+    if (detailEl) detailEl.classList.add("hidden");
+  } else if (status === "running") {
     el.classList.add("active");
-    statusEl.textContent = "running";
-    statusEl.className = "phase-status text-xs text-forge-accent animate-pulse";
+    currentRunningPhase = phaseId;
+    statusEl.innerHTML = `<span class="inline-flex items-center gap-1.5">${meta.label}<span class="phase-spinner"></span></span>`;
+    statusEl.className = "phase-status phase-status-running text-xs";
+    if (iconEl) iconEl.innerHTML = '<span class="phase-spinner"></span>';
+    if (detailEl) {
+      detailEl.textContent = detail;
+      detailEl.classList.toggle("hidden", !detail);
+    }
   } else if (status === "complete") {
     el.classList.add("complete");
     statusEl.textContent = "✓ done";
-    statusEl.className = "phase-status text-xs text-forge-safe";
+    statusEl.className = "phase-status phase-status-complete text-xs";
+    if (iconEl) iconEl.textContent = "✓";
+    if (detailEl) detailEl.classList.add("hidden");
+  } else if (status === "error") {
+    el.classList.add("error");
+    statusEl.textContent = "✗ error";
+    statusEl.className = "phase-status phase-status-error text-xs";
+    if (iconEl) iconEl.textContent = "✗";
+    if (detailEl) {
+      detailEl.textContent = detail || "Phase failed";
+      detailEl.classList.remove("hidden");
+    }
   }
+}
+
+function setAllPhasesPending() {
+  PHASES.forEach((p) => updatePhase(p.id, "pending"));
+}
+
+function setScanActivity(message, active = true) {
+  if (scanActivityStatus) scanActivityStatus.textContent = message;
+  scanActivityDot?.classList.toggle("hidden", !active);
+  logWaiting?.classList.toggle("hidden", !active);
+  progressFill?.classList.toggle("indeterminate", active && scanRunning);
+}
+
+function touchActivity() {
+  lastEventAt = Date.now();
+}
+
+function startScanTimers() {
+  scanStartedAt = Date.now();
+  scanElapsed?.classList.remove("hidden");
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(() => {
+    if (!scanRunning) return;
+    const sec = Math.floor((Date.now() - scanStartedAt) / 1000);
+    const m = Math.floor(sec / 60);
+    const s = String(sec % 60).padStart(2, "0");
+    if (scanElapsed) scanElapsed.textContent = `${m}:${s}`;
+  }, 1000);
+
+  if (activityTimer) clearInterval(activityTimer);
+  activityTimer = setInterval(() => {
+    if (!scanRunning) return;
+    const idleMs = Date.now() - lastEventAt;
+    if (idleMs > 2500 && currentRunningPhase > 0) {
+      const phase = PHASES[currentRunningPhase - 1];
+      setScanActivity(`Still working on Phase ${currentRunningPhase}: ${phase?.name || "pipeline"}... (${Math.floor(idleMs / 1000)}s)`);
+    }
+  }, 1000);
+}
+
+function stopScanTimers() {
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  if (activityTimer) clearInterval(activityTimer);
+  elapsedTimer = null;
+  activityTimer = null;
 }
 
 function appendLog(entry) {
@@ -129,8 +223,15 @@ function appendLog(entry) {
   div.className = `log-entry log-${entry.level}`;
   const time = formatTime(entry.timestamp);
   div.innerHTML = `<span class="text-forge-muted">[${time}]</span> <span class="text-forge-muted">P${entry.phase}</span> ${escapeHtml(entry.message)}`;
-  logTerminal.appendChild(div);
+  if (logWaiting && logTerminal.contains(logWaiting)) {
+    logTerminal.insertBefore(div, logWaiting);
+  } else {
+    logTerminal.appendChild(div);
+  }
+  logEventCount++;
+  if (logCount) logCount.textContent = `${logEventCount} event${logEventCount === 1 ? "" : "s"}`;
   logTerminal.scrollTop = logTerminal.scrollHeight;
+  touchActivity();
 }
 
 function escapeHtml(str) {
@@ -140,7 +241,8 @@ function escapeHtml(str) {
 }
 
 function setProgress(pct) {
-  $("#scan-progress-fill").style.width = `${pct}%`;
+  progressFill.style.width = `${pct}%`;
+  progressFill.classList.remove("indeterminate");
   $("#scan-progress-text").textContent = `${pct}%`;
 }
 
@@ -187,9 +289,18 @@ async function launchScan() {
   // Reset UI
   currentReport = null;
   mindmapVariant = 0;
+  logEventCount = 0;
+  currentRunningPhase = 0;
   logTerminal.innerHTML = "";
+  if (logWaiting) logTerminal.appendChild(logWaiting);
+  if (logCount) logCount.textContent = "0 events";
   initPhaseIndicators();
+  setAllPhasesPending();
   setProgress(0);
+  setScanActivity("Connecting to recon pipeline...", true);
+  scanRunning = true;
+  startScanTimers();
+  touchActivity();
 
   sectionInput.classList.add("hidden");
   sectionPipeline.classList.remove("hidden");
@@ -207,13 +318,21 @@ async function launchScan() {
     await streamScan(payload);
   } catch (err) {
     showToast(err.message || "Scan failed", "error");
+    if (currentRunningPhase > 0) {
+      updatePhase(currentRunningPhase, "error", err.message);
+    }
+    setScanActivity(`Scan failed: ${err.message || "Unknown error"}`, false);
     appendLog({
       timestamp: new Date().toISOString(),
-      phase: 0,
+      phase: currentRunningPhase || 0,
       level: "error",
       message: `FATAL: ${err.message}`,
     });
   } finally {
+    scanRunning = false;
+    stopScanTimers();
+    logWaiting?.classList.add("hidden");
+    progressFill?.classList.remove("indeterminate");
     $("#btn-launch").disabled = false;
   }
 }
@@ -243,6 +362,7 @@ function parseSSEEvent(raw) {
 
 /** Stream recon scan via SSE */
 async function streamScan(payload) {
+  setScanActivity("Starting scan stream...", true);
   const response = await fetch("/api/recon/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -257,6 +377,8 @@ async function streamScan(payload) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  touchActivity();
+  setScanActivity("Pipeline connected — receiving live events...", true);
 
   while (true) {
     const { done, value } = await reader.read();
@@ -276,13 +398,26 @@ async function streamScan(payload) {
 }
 
 function handleScanEvent(type, data) {
+  touchActivity();
   switch (type) {
     case "phase":
       if (data.status === "running") {
-        updatePhase(data.phase, "running");
+        updatePhase(data.phase, "running", data.detail || "");
+        if (typeof data.progress === "number") {
+          progressFill.style.width = `${data.progress}%`;
+          $("#scan-progress-text").textContent = `${data.progress}%`;
+        }
+        const phase = PHASES[data.phase - 1];
+        setScanActivity(data.detail || `Phase ${data.phase}: ${phase?.name || "Running"}...`, true);
       } else if (data.status === "complete") {
         updatePhase(data.phase, "complete");
         setProgress(data.progress);
+        setScanActivity(`Phase ${data.phase} complete`, true);
+      } else if (data.status === "error") {
+        updatePhase(data.phase, "error", data.detail);
+        setScanActivity(data.detail || `Phase ${data.phase} failed`, false);
+      } else if (data.status === "pending") {
+        updatePhase(data.phase, "pending");
       }
       break;
     case "log":
@@ -292,12 +427,17 @@ function handleScanEvent(type, data) {
       onScanComplete(data);
       break;
     case "error":
+      if (currentRunningPhase > 0) updatePhase(currentRunningPhase, "error", data.message);
+      setScanActivity(data.message || "Scan error", false);
       showToast(data.message, "error");
       break;
   }
 }
 
 async function onScanComplete(slimReport) {
+  scanRunning = false;
+  stopScanTimers();
+  setScanActivity("Scan complete — generating report...", false);
   showToast("Reconnaissance complete!", "success");
   setProgress(100);
 
@@ -327,6 +467,7 @@ async function onScanComplete(slimReport) {
   renderDashboard(currentReport);
   renderReport(currentReport);
 
+  setScanActivity(`Complete — ${currentReport.subdomains?.length || 0} live hosts, risk ${currentReport.riskScore}/100`, false);
   sectionMindmap.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 

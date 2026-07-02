@@ -11,7 +11,7 @@
 import { createRng, domainSeed, extractDomain } from "../lib/domain";
 import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
-import { enumerateSubdomains } from "./subdomain";
+import { enumerateSubdomains, enumerateSubdomainsStream } from "./subdomain";
 import type {
   LogEntry,
   OsintFinding,
@@ -22,6 +22,7 @@ import type {
   SynthesisInsight,
   TechFingerprint,
   Vulnerability,
+  PhaseEvent,
 } from "../lib/types";
 
 const PHASES = [
@@ -227,7 +228,7 @@ function generateSynthesis(
 }
 
 export type ScanEvent =
-  | { type: "phase"; data: { phase: number; name: string; status: string; progress: number } }
+  | { type: "phase"; data: PhaseEvent }
   | { type: "log"; data: LogEntry }
   | { type: "complete"; data: Omit<ReconReport, "markdown" | "html"> };
 
@@ -246,7 +247,7 @@ export async function* runReconScan(
   // ── Phase 1: OSINT ──────────────────────────────────────────────
   yield {
     type: "phase",
-    data: { phase: 1, name: PHASES[0].name, status: "running", progress: 0 },
+    data: { phase: 1, name: PHASES[0].name, status: "running", progress: 0, detail: "Collecting OSINT..." },
   };
   yield { type: "log", data: log(1, "info", `[SIM] Initializing OSINT collectors for ${domain}...`) };
   await delay(400);
@@ -272,34 +273,53 @@ export async function* runReconScan(
   // ── Phase 2: Subdomains ─────────────────────────────────────────
   yield {
     type: "phase",
-    data: { phase: 2, name: PHASES[1].name, status: "running", progress: 20 },
+    data: { phase: 2, name: PHASES[1].name, status: "running", progress: 20, detail: "Starting live subdomain enumeration..." },
   };
   yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (crt.sh, DNS verify, HTTP probe)...") };
-  await delay(200);
 
-  yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (crt.sh, DNS verify, HTTP probe)...") };
-  await delay(200);
+  const subdomains: SubdomainEntry[] = [];
+  for await (const event of enumerateSubdomainsStream(domain, { depth: request.depth })) {
+    if (event.kind === "status") {
+      yield {
+        type: "phase",
+        data: { phase: 2, name: PHASES[1].name, status: "running", progress: 22, detail: event.message },
+      };
+      yield { type: "log", data: log(2, "info", event.message) };
+      continue;
+    }
 
-  const pendingLogs: string[] = [];
-  const subdomains = await enumerateSubdomains(domain, {
-    depth: request.depth,
-    onCandidate: (message) => pendingLogs.push(message),
-  });
+    if (event.kind === "progress") {
+      const phasePct = 20 + Math.floor((event.current / Math.max(event.total, 1)) * 18);
+      const detail =
+        event.state === "checking"
+          ? `Checking ${event.host} (${event.current}/${event.total})...`
+          : event.state === "alive"
+            ? `Alive: ${event.host} (${event.current}/${event.total})`
+            : `No DNS: ${event.host} (${event.current}/${event.total})`;
+      yield {
+        type: "phase",
+        data: { phase: 2, name: PHASES[1].name, status: "running", progress: phasePct, detail },
+      };
+      if (event.state === "checking") {
+        yield { type: "log", data: log(2, "info", `→ ${detail}`) };
+      } else if (event.state === "dead") {
+        yield { type: "log", data: log(2, "info", `✗ ${event.host} — no DNS record`) };
+      }
+      continue;
+    }
 
-  for (const message of pendingLogs) {
-    yield { type: "log", data: log(2, "info", message) };
-  }
-
-  for (const sub of subdomains) {
-    yield {
-      type: "log",
-      data: log(
-        2,
-        sub.status >= 400 ? "warn" : "success",
-        `Alive ${sub.host} → ${sub.ip} [${sub.services.join(", ")}] HTTP ${sub.status}`
-      ),
-    };
-    await delay(80);
+    if (event.kind === "verified") {
+      subdomains.push(event.entry);
+      const sub = event.entry;
+      yield {
+        type: "log",
+        data: log(
+          2,
+          sub.status >= 400 ? "warn" : "success",
+          `✓ ${sub.host} → ${sub.ip} [${sub.services.join(", ")}] HTTP ${sub.status}`
+        ),
+      };
+    }
   }
 
   if (!subdomains.length) {
@@ -317,7 +337,7 @@ export async function* runReconScan(
   // ── Phase 3: Fingerprinting ─────────────────────────────────────
   yield {
     type: "phase",
-    data: { phase: 3, name: PHASES[2].name, status: "running", progress: 40 },
+    data: { phase: 3, name: PHASES[2].name, status: "running", progress: 40, detail: "Probing HTTP headers..." },
   };
   yield { type: "log", data: log(3, "info", "Probing HTTP headers and technology signatures...") };
   await delay(400);
@@ -337,7 +357,7 @@ export async function* runReconScan(
   // ── Phase 4: Vulnerabilities ────────────────────────────────────
   yield {
     type: "phase",
-    data: { phase: 4, name: PHASES[3].name, status: "running", progress: 60 },
+    data: { phase: 4, name: PHASES[3].name, status: "running", progress: 60, detail: "Matching CVE databases..." },
   };
   yield { type: "log", data: log(4, "info", "Cross-referencing tech stack against CVE databases (NVD, OSV)...") };
   await delay(450);
@@ -363,7 +383,7 @@ export async function* runReconScan(
   // ── Phase 5: Synthesis ────────────────────────────────────────────
   yield {
     type: "phase",
-    data: { phase: 5, name: PHASES[4].name, status: "running", progress: 80 },
+    data: { phase: 5, name: PHASES[4].name, status: "running", progress: 80, detail: "Computing risk score..." },
   };
   yield { type: "log", data: log(5, "info", "Synthesizing intelligence and computing risk score...") };
   await delay(500);
