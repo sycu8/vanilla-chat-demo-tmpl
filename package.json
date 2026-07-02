@@ -11,7 +11,8 @@
     "build:css": "tailwindcss -i src/style.css -o public/static/style.css --minify",
     "preview": "wrangler pages dev dist --live-reload",
     "deploy": "npm run build && wrangler pages deploy dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test-orangecloud.mjs"
   },
   "dependencies": {
     "hono": "^4.5.1"

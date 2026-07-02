@@ -5,8 +5,8 @@
 
 // ── State ───────────────────────────────────────────────────────────
 let currentReport = null;
+let lastScanPayload = null;
 let mindmapVariant = 0;
-let scanAbort = null;
 
 const PHASES = [
   { id: 1, name: "OSINT & Social Engineering", icon: "🔍" },
@@ -36,24 +36,26 @@ const statusBadge = $("#status-badge");
 const btnNewScan = $("#btn-new-scan");
 
 // ── Mermaid Init ────────────────────────────────────────────────────
-mermaid.initialize({
-  startOnLoad: false,
-  theme: "dark",
-  themeVariables: {
-    primaryColor: "#1a2332",
-    primaryTextColor: "#e2e8f0",
-    primaryBorderColor: "#00ff88",
-    lineColor: "#38bdf8",
-    secondaryColor: "#111827",
-    tertiaryColor: "#0a0e17",
-    fontFamily: "Inter, system-ui, sans-serif",
-  },
-  mindmap: {
-    padding: 20,
-    useMaxWidth: true,
-  },
-  securityLevel: "loose",
-});
+if (typeof mermaid !== "undefined") {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "dark",
+    themeVariables: {
+      primaryColor: "#1a2332",
+      primaryTextColor: "#e2e8f0",
+      primaryBorderColor: "#00ff88",
+      lineColor: "#38bdf8",
+      secondaryColor: "#111827",
+      tertiaryColor: "#0a0e17",
+      fontFamily: "Inter, system-ui, sans-serif",
+    },
+    mindmap: {
+      padding: 20,
+      useMaxWidth: true,
+    },
+    securityLevel: "loose",
+  });
+}
 
 // ── Utilities ─────────────────────────────────────────────────────
 function extractDomain(input) {
@@ -199,6 +201,7 @@ async function launchScan() {
   $("#btn-launch").disabled = true;
 
   const payload = { target, keywords, depth, simulation };
+  lastScanPayload = payload;
 
   try {
     await streamScan(payload);
@@ -212,6 +215,29 @@ async function launchScan() {
     });
   } finally {
     $("#btn-launch").disabled = false;
+  }
+}
+
+/** Parse a single SSE event block */
+function parseSSEEvent(raw) {
+  let eventType = "message";
+  const dataLines = [];
+
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("event:")) {
+      eventType = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (!dataLines.length) return;
+
+  try {
+    const data = JSON.parse(dataLines.join("\n"));
+    handleScanEvent(eventType, data);
+  } catch (err) {
+    console.warn("[ReconForge] SSE parse error:", err.message);
   }
 }
 
@@ -237,24 +263,16 @@ async function streamScan(payload) {
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
 
-    let eventType = "";
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        eventType = line.slice(6).trim();
-      } else if (line.startsWith("data:") && eventType) {
-        try {
-          const data = JSON.parse(line.slice(5).trim());
-          handleScanEvent(eventType, data);
-        } catch {
-          /* skip malformed */
-        }
-        eventType = "";
-      }
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      if (rawEvent.trim()) parseSSEEvent(rawEvent);
     }
   }
+
+  if (buffer.trim()) parseSSEEvent(buffer);
 }
 
 function handleScanEvent(type, data) {
@@ -271,7 +289,6 @@ function handleScanEvent(type, data) {
       appendLog(data);
       break;
     case "complete":
-      currentReport = data;
       onScanComplete(data);
       break;
     case "error":
@@ -280,27 +297,54 @@ function handleScanEvent(type, data) {
   }
 }
 
-async function onScanComplete(report) {
+async function onScanComplete(slimReport) {
   showToast("Reconnaissance complete!", "success");
   setProgress(100);
 
-  // Show mindmap
-  sectionMindmap.classList.remove("hidden");
-  await renderMindmap(report.mindmap);
+  // Fetch full report (markdown + html) — SSE omits large fields for reliability
+  try {
+    const res = await fetch("/api/recon/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(lastScanPayload),
+    });
+    if (res.ok) {
+      const { report } = await res.json();
+      currentReport = report;
+    } else {
+      currentReport = slimReport;
+      showToast("Full report fetch failed — exports may be limited", "warn");
+    }
+  } catch {
+    currentReport = slimReport;
+    showToast("Full report fetch failed — exports may be limited", "warn");
+  }
 
-  // Show report
+  sectionMindmap.classList.remove("hidden");
+  await renderMindmap(currentReport.mindmap);
+
   sectionReport.classList.remove("hidden");
-  renderDashboard(report);
-  renderReport(report);
+  renderDashboard(currentReport);
+  renderReport(currentReport);
 
   sectionMindmap.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // ── Mindmap ─────────────────────────────────────────────────────────
 async function renderMindmap(source) {
+  if (!source) {
+    mindmapContainer.innerHTML = '<p class="text-forge-muted">No mindmap data available.</p>';
+    return;
+  }
+  if (typeof mermaid === "undefined") {
+    mindmapContainer.innerHTML = '<p class="text-forge-danger">Mermaid.js failed to load. Check your network connection.</p>';
+    return;
+  }
+
   mindmapContainer.innerHTML = '<div class="text-forge-muted animate-pulse">Rendering mindmap...</div>';
   try {
     const id = `mindmap-${Date.now()}`;
+    await mermaid.parse(source);
     const { svg } = await mermaid.render(id, source);
     mindmapContainer.innerHTML = svg;
 
@@ -354,7 +398,10 @@ $("#btn-export-png").addEventListener("click", async () => {
   }
 
   try {
-    const svgData = new XMLSerializer().serializeToString(svg);
+    let svgData = new XMLSerializer().serializeToString(svg);
+    if (!svgData.includes("xmlns=")) {
+      svgData = svgData.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     const img = new Image();
@@ -362,8 +409,10 @@ $("#btn-export-png").addEventListener("click", async () => {
     const url = URL.createObjectURL(blob);
 
     img.onload = () => {
-      canvas.width = img.width * 2;
-      canvas.height = img.height * 2;
+      const w = img.naturalWidth || img.width || 1200;
+      const h = img.naturalHeight || img.height || 800;
+      canvas.width = w * 2;
+      canvas.height = h * 2;
       ctx.fillStyle = "#0a0e17";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
@@ -374,6 +423,10 @@ $("#btn-export-png").addEventListener("click", async () => {
       a.href = canvas.toDataURL("image/png");
       a.click();
       showToast("Mindmap exported as PNG", "success");
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      showToast("PNG export failed — try screenshot instead", "error");
     };
     img.src = url;
   } catch (err) {

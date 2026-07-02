@@ -4,11 +4,13 @@
  */
 
 import { Hono } from "hono";
+import { serveStatic } from "hono/cloudflare-pages";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import reconRoutes from "./api/recon";
 
 type Bindings = {
+  ASSETS: Fetcher;
   // Future: API keys for live recon integrations
   CRT_SH_API?: string;
   SHODAN_API_KEY?: string;
@@ -33,5 +35,11 @@ app.route("/api/recon", reconRoutes);
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", app: "ReconForge" });
 });
+
+// Serve SPA — vite-cloudflare-pages only wires /static/* and /favicon.ico by default
+const serveAsset = serveStatic();
+
+app.get("/", serveAsset);
+app.get("/index.html", serveAsset);
 
 export default app;

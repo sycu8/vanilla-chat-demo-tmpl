@@ -283,7 +283,7 @@ function generateSynthesis(
 export type ScanEvent =
   | { type: "phase"; data: { phase: number; name: string; status: string; progress: number } }
   | { type: "log"; data: LogEntry }
-  | { type: "complete"; data: ReconReport };
+  | { type: "complete"; data: Omit<ReconReport, "markdown" | "html"> };
 
 /** Async generator that yields scan events phase-by-phase */
 export async function* runReconScan(
@@ -450,7 +450,11 @@ export async function* runReconScan(
     data: { phase: 5, name: PHASES[4].name, status: "complete", progress: 100 },
   };
   yield { type: "log", data: log(5, "success", `Recon complete. Risk score: ${riskScore}/100`) };
-  yield { type: "complete", data: report };
+
+  // Omit markdown/html from SSE — large payloads can break chunked stream parsing.
+  // Client fetches full report via POST /api/recon/report after scan completes.
+  const { markdown: _md, html: _html, ...slimReport } = report;
+  yield { type: "complete", data: slimReport };
 }
 
 /** Generate report synchronously (for regenerate mindmap endpoint) */
