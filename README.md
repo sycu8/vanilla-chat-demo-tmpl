@@ -1,78 +1,70 @@
-# Vanilla JavaScript Chat Application using Cloudflare Workers AI
+# ReconForge
 
-A web based chat interface built on [Cloudflare Pages](https://pages.cloudflare.com) that allows for exploring [Text Generation models](https://developers.cloudflare.com/workers-ai/models/#text-generation) on [Cloudflare Workers AI](https://developers.cloudflare.com/workers-ai/). Design is built using [tailwind](https://tailwindcss.com/).
+**Autonomous Security Reconnaissance & Pentesting Platform** — built on Cloudflare Pages + Hono.
 
-[<img src="https://img.youtube.com/vi/5UTExUQ8Fwo/0.jpg">](https://youtu.be/5UTExUQ8Fwo "Workers AI - Getting Started - Vanilla Chat App")
+![ReconForge](https://img.shields.io/badge/Cloudflare-Pages-F38020?style=flat-square&logo=cloudflare)
+![Hono](https://img.shields.io/badge/Hono-4.x-E36002?style=flat-square)
+![Tailwind](https://img.shields.io/badge/Tailwind-3.4-38B2AC?style=flat-square&logo=tailwindcss)
 
-This demo makes use of [LocalStorage](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage) to maintain state. We have better solutions available (moar coming soon).
+ReconForge delivers a professional 5-phase reconnaissance pipeline with live streaming logs, interactive Mermaid mindmaps, and exportable security reports — fully functional in simulation mode out of the box.
 
-This is a template repository. Please feel free to create your own repository from this one by using the "Use this template" button. It's right next to the ⭐️ this repo button, which you could totally do as well if you wanted to.
+## Features
 
-This is, like all of us, a Work in Progress.
+- **5-Phase Recon Pipeline** — OSINT, subdomain enumeration, tech fingerprinting, CVE matching, intelligence synthesis
+- **Live SSE Streaming** — Real-time phase progress and terminal-style logs
+- **Interactive Mindmap** — Mermaid.js visualization with zoom, click, regenerate, and PNG export
+- **Professional Reports** — Markdown, HTML, and PDF export with risk scoring dashboard
+- **Simulation Mode** — Realistic mock data for any domain — safe for demos and training
+- **Dark Cybersecurity UI** — Responsive Tailwind design, toast notifications, loading states
 
-## Installation
+## Quick Start
 
 ```bash
 npm install
-# If this is your first time here
 npx wrangler login
-```
-
-## Develop
-
-This uses the local Vite server for rapid development
-
-```bash
-npm run dev
-```
-
-### Preview
-
-This builds and runs in Wrangler your site locally, just as it will run on production
-
-```bash
+npm run build
 npm run preview
 ```
 
-## Deploy
+Open `http://localhost:8788`, enter a target domain, and click **Launch Recon**.
 
-This hosts your site on [Cloudflare Pages](https://pages.cloudflare.com)
+## Deploy
 
 ```bash
 npm run deploy
 ```
 
-###  Debug
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for full Cloudflare Pages setup, Git integration, secrets, and production extension guide.
 
-```bash
-npx wrangler pages deployment tail
+## Project Structure
+
+```
+├── public/index.html       # Frontend SPA
+├── public/static/app.js    # Client application
+├── src/index.tsx           # Hono entry point
+├── src/api/recon.ts        # API routes
+├── src/services/simulation.ts  # Recon engine (mock + extension points)
+├── src/lib/                # Domain, mindmap, report utilities
+├── wrangler.toml           # Cloudflare config
+└── .env.example            # Environment template
 ```
 
-## Advanced
+## API
 
-If you are on a Mac, you can generate the list of models in [script.js](./public/static/script.js) by running the following commands:
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/recon/health` | GET | Health check |
+| `/api/recon/scan` | POST | SSE recon pipeline |
+| `/api/recon/mindmap` | POST | Regenerate mindmap |
+| `/api/recon/report` | POST | Instant report |
 
-```bash
-# If this is your first time here. You won't regret it.
-brew install jq
-```
+## Tech Stack
 
-```bash
-# Filter all Text Generation models into "ga" and "beta"
-npx wrangler ai models --json | jq ' 
-  reduce .[] as $item (
-    {beta: [], ga: []};
-    if ($item.task.name == "Text Generation") then
-      if ($item.properties | any(.property_id == "beta" and .value == "true")) then
-        .beta += [$item.name]
-      else
-        .ga += [$item.name]
-      end
-    else
-      .
-    end
-  ) |
-  .beta |= sort |
-  .ga |= sort
-'
-```
+- **Backend:** [Hono](https://hono.dev) on Cloudflare Pages Functions
+- **Frontend:** HTML + Tailwind CSS + Vanilla JS
+- **Visualization:** [Mermaid.js](https://mermaid.js.org) mindmaps
+- **Export:** jsPDF, browser-native downloads
+
+## License
+
+For authorized security testing and educational use only.

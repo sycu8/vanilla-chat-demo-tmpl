@@ -1,16 +1,19 @@
 {
   "type": "module",
+  "name": "reconforge",
+  "version": "1.0.0",
+  "description": "ReconForge — Autonomous Security Reconnaissance & Pentesting Tool on Cloudflare Pages",
   "scripts": {
     "dev": "concurrently \"npm:preview\" \"npm:watch:vite\" \"npm:watch:css\"",
     "watch:vite": "vite build --watch",
     "watch:css": "tailwindcss -i src/style.css -o public/static/style.css --watch",
-    "build": "$npm_execpath run build:css && vite build",
-    "build:css": "tailwindcss -i src/style.css -o public/static/style.css",
-    "preview": "wrangler pages dev --live-reload dist",
-    "deploy": "$npm_execpath run build && wrangler pages deploy dist"
+    "build": "npm run build:css && vite build",
+    "build:css": "tailwindcss -i src/style.css -o public/static/style.css --minify",
+    "preview": "wrangler pages dev dist --live-reload",
+    "deploy": "npm run build && wrangler pages deploy dist",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "eventsource-parser": "^1.1.2",
     "hono": "^4.5.1"
   },
   "devDependencies": {
@@ -21,7 +24,8 @@
     "concurrently": "^8.2.2",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
+    "typescript": "^5.4.5",
     "vite": "^5.0.12",
     "wrangler": "^3.103.1"
-  },"name": "vanilla-chat-demo-tmpl"
+  }
 }

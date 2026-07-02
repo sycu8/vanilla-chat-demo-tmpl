@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="ReconForge — Autonomous Security Reconnaissance & Pentesting Platform" />
+  <meta name="theme-color" content="#0a0e17" />
+  <title>ReconForge — Security Reconnaissance Platform</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>" />
+  <link href="/static/style.css" rel="stylesheet" />
+  <!-- Mermaid.js v11 for interactive mindmaps -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <!-- jsPDF for PDF export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js" crossorigin="anonymous"></script>
+  <!-- Marked for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+</head>
+<body class="min-h-screen">
+
+  <!-- ═══ HEADER ═══ -->
+  <header class="border-b border-forge-border bg-forge-surface/80 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-forge-accent/10 border border-forge-accent/30 flex items-center justify-center text-xl animate-glow">
+          🛡️
+        </div>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight">
+            <span class="text-forge-accent">Recon</span><span class="text-forge-text">Forge</span>
+          </h1>
+          <p class="text-xs text-forge-muted hidden sm:block">Autonomous Security Reconnaissance</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="status-badge" class="text-xs font-mono px-3 py-1 rounded-full bg-forge-safe/10 text-forge-safe border border-forge-safe/30">
+          ● SIMULATION MODE
+        </span>
+        <button id="btn-new-scan" class="forge-btn-secondary text-sm py-2 px-4 hidden" type="button">
+          New Scan
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+
+    <!-- ═══ SECTION: INPUT ═══ -->
+    <section id="section-input" class="space-y-8">
+      <!-- Hero -->
+      <div class="text-center max-w-2xl mx-auto space-y-4">
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight">
+          Forge Your <span class="text-forge-accent">Attack Surface</span> Intelligence
+        </h2>
+        <p class="text-forge-muted text-lg">
+          Autonomous 5-phase reconnaissance pipeline with OSINT, subdomain enumeration,
+          tech fingerprinting, CVE matching, and interactive threat visualization.
+        </p>
+      </div>
+
+      <!-- Scan Form -->
+      <form id="scan-form" class="forge-card max-w-2xl mx-auto space-y-6">
+        <div>
+          <label for="target" class="block text-sm font-semibold text-forge-text mb-2">
+            Target URL / Domain
+          </label>
+          <input
+            type="text"
+            id="target"
+            name="target"
+            class="forge-input font-mono"
+            placeholder="https://example.com or example.com"
+            required
+            autocomplete="off"
+          />
+          <p id="domain-preview" class="text-xs text-forge-muted mt-1.5 font-mono hidden">
+            Detected domain: <span class="text-forge-accent2"></span>
+          </p>
+        </div>
+
+        <div>
+          <label for="keywords" class="block text-sm font-semibold text-forge-text mb-2">
+            Company Keywords
+            <span class="text-forge-muted font-normal">(comma-separated)</span>
+          </label>
+          <input
+            type="text"
+            id="keywords"
+            name="keywords"
+            class="forge-input"
+            placeholder="acme, acme-corp, acmecloud"
+            autocomplete="off"
+          />
+        </div>
+
+        <!-- Advanced Options -->
+        <details class="group">
+          <summary class="cursor-pointer text-sm font-semibold text-forge-accent2 hover:text-forge-accent transition-colors select-none">
+            ▶ Advanced Options
+          </summary>
+          <div class="mt-4 space-y-4 pl-4 border-l-2 border-forge-border">
+            <div>
+              <label class="block text-sm font-medium text-forge-text mb-2">Scan Depth</label>
+              <div class="flex gap-4">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="depth" value="quick" checked class="accent-forge-accent" />
+                  <span class="text-sm">Quick <span class="text-forge-muted">(~30s)</span></span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="depth" value="deep" class="accent-forge-accent" />
+                  <span class="text-sm">Deep <span class="text-forge-muted">(~60s)</span></span>
+                </label>
+              </div>
+            </div>
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" id="simulation" name="simulation" checked class="accent-forge-accent w-4 h-4" />
+              <div>
+                <span class="text-sm font-medium">Enable Simulation Mode</span>
+                <p class="text-xs text-forge-muted">Generates realistic mock data — safe for demos and training</p>
+              </div>
+            </label>
+          </div>
+        </details>
+
+        <button type="submit" id="btn-launch" class="forge-btn-primary w-full text-lg py-4">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+          Launch Recon
+        </button>
+      </form>
+    </section>
+
+    <!-- ═══ SECTION: PIPELINE ═══ -->
+    <section id="section-pipeline" class="hidden space-y-6 mt-8">
+      <!-- Progress Header -->
+      <div class="forge-card">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-bold text-forge-text">
+            Recon Pipeline — <span id="scan-target-label" class="text-forge-accent2 font-mono"></span>
+          </h3>
+          <span id="scan-progress-text" class="text-sm font-mono text-forge-muted">0%</span>
+        </div>
+        <div class="scan-progress-bar">
+          <div id="scan-progress-fill" class="scan-progress-fill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <div class="grid lg:grid-cols-3 gap-6">
+        <!-- Phase Indicators -->
+        <div class="lg:col-span-1 space-y-2" id="phase-indicators">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- Live Log Terminal -->
+        <div class="lg:col-span-2 forge-card flex flex-col h-[420px]">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold text-forge-accent2 uppercase tracking-wider">Live Feed</h4>
+            <div class="flex gap-1">
+              <span class="w-3 h-3 rounded-full bg-forge-danger/60"></span>
+              <span class="w-3 h-3 rounded-full bg-forge-warn/60"></span>
+              <span class="w-3 h-3 rounded-full bg-forge-safe/60"></span>
+            </div>
+          </div>
+          <div id="log-terminal" class="flex-1 overflow-y-auto bg-forge-bg rounded-lg border border-forge-border p-3 font-mono text-xs space-y-0.5">
+            <!-- Logs appended here -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: MINDMAP ═══ -->
+    <section id="section-mindmap" class="hidden space-y-4 mt-8">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <h3 class="text-xl font-bold text-forge-text">
+          Threat <span class="text-forge-accent">Mindmap</span>
+        </h3>
+        <div class="flex gap-2">
+          <button id="btn-regenerate" class="forge-btn-secondary text-sm py-2" type="button">
+            🔄 Regenerate
+          </button>
+          <button id="btn-export-png" class="forge-btn-secondary text-sm py-2" type="button">
+            📷 Export PNG
+          </button>
+        </div>
+      </div>
+      <div class="forge-card overflow-hidden">
+        <div class="flex flex-wrap gap-4 mb-4 text-xs">
+          <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-forge-safe"></span> Info</span>
+          <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-forge-warn"></span> Medium Risk</span>
+          <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-forge-danger"></span> High Risk</span>
+        </div>
+        <div id="mindmap-container" class="min-h-[400px] flex items-center justify-center bg-forge-bg rounded-lg border border-forge-border p-4 overflow-auto">
+          <p class="text-forge-muted">Mindmap will render after scan completes...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: REPORT ═══ -->
+    <section id="section-report" class="hidden space-y-6 mt-8">
+      <!-- Risk Dashboard -->
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4" id="risk-dashboard">
+        <!-- Populated by JS -->
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <h3 class="text-xl font-bold text-forge-text">
+          Security <span class="text-forge-accent">Report</span>
+        </h3>
+        <div class="flex gap-2">
+          <button id="btn-download-md" class="forge-btn-secondary text-sm py-2" type="button">
+            ⬇ Markdown
+          </button>
+          <button id="btn-download-pdf" class="forge-btn-secondary text-sm py-2" type="button">
+            ⬇ PDF
+          </button>
+          <button id="btn-download-html" class="forge-btn-secondary text-sm py-2" type="button">
+            ⬇ HTML
+          </button>
+        </div>
+      </div>
+
+      <div class="forge-card">
+        <div id="report-content" class="report-prose max-w-none">
+          <!-- Rendered report -->
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ═══ FOOTER ═══ -->
+  <footer class="border-t border-forge-border mt-16 py-6 text-center text-xs text-forge-muted">
+    <p>ReconForge v1.0 — Built on <a href="https://developers.cloudflare.com/pages/" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Cloudflare Pages</a> + <a href="https://hono.dev" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Hono</a></p>
+    <p class="mt-1">⚠️ For authorized security testing only. Simulation mode generates synthetic data.</p>
+  </footer>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>

@@ -2,14 +2,122 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+@layer base {
+  body {
+    @apply bg-forge-bg text-forge-text font-sans antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-forge-bg;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-forge-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-forge-muted;
+  }
+}
+
 @layer components {
-  .message-user {
-    @apply text-left text-black w-full;
+  .forge-input {
+    @apply w-full bg-forge-surface border border-forge-border rounded-lg px-4 py-3
+           text-forge-text placeholder-forge-muted
+           focus:outline-none focus:border-forge-accent focus:ring-1 focus:ring-forge-accent/30
+           transition-all duration-200;
   }
-  .message-assistant {
-    @apply bg-chat-bubble p-4 rounded-lg text-black shadow mb-2 w-full;
+
+  .forge-btn {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-semibold
+           transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
   }
-  .message-model {
-    @apply text-xs text-gray-500;
+
+  .forge-btn-primary {
+    @apply forge-btn bg-forge-accent text-forge-bg hover:bg-forge-accent/90
+           shadow-forge hover:shadow-forge-lg active:scale-[0.98];
   }
+
+  .forge-btn-secondary {
+    @apply forge-btn bg-forge-card border border-forge-border text-forge-text
+           hover:border-forge-accent2 hover:text-forge-accent2;
+  }
+
+  .forge-card {
+    @apply bg-forge-card border border-forge-border rounded-xl p-6 shadow-forge-lg;
+  }
+
+  .phase-indicator {
+    @apply flex items-center gap-3 p-3 rounded-lg border border-forge-border
+           bg-forge-surface transition-all duration-300;
+  }
+
+  .phase-indicator.active {
+    @apply border-forge-accent bg-forge-accent/5 shadow-forge;
+  }
+
+  .phase-indicator.complete {
+    @apply border-forge-safe/50 bg-forge-safe/5;
+  }
+
+  .log-entry {
+    @apply font-mono text-xs py-1 px-2 rounded;
+  }
+
+  .log-info { @apply text-forge-accent2; }
+  .log-success { @apply text-forge-safe; }
+  .log-warn { @apply text-forge-warn; }
+  .log-error { @apply text-forge-danger; }
+
+  .risk-badge-high {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-bold
+           bg-forge-danger/20 text-forge-danger border border-forge-danger/30;
+  }
+  .risk-badge-medium {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-bold
+           bg-forge-warn/20 text-forge-warn border border-forge-warn/30;
+  }
+  .risk-badge-info {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-bold
+           bg-forge-safe/20 text-forge-safe border border-forge-safe/30;
+  }
+
+  .toast {
+    @apply fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-forge-lg
+           border font-medium text-sm transform transition-all duration-300
+           translate-y-0 opacity-100;
+  }
+  .toast-success { @apply bg-forge-safe/10 border-forge-safe/30 text-forge-safe; }
+  .toast-error { @apply bg-forge-danger/10 border-forge-danger/30 text-forge-danger; }
+  .toast-info { @apply bg-forge-accent2/10 border-forge-accent2/30 text-forge-accent2; }
+  .toast-warn { @apply bg-forge-warn/10 border-forge-warn/30 text-forge-warn; }
+
+  .scan-progress-bar {
+    @apply h-1.5 bg-forge-border rounded-full overflow-hidden;
+  }
+  .scan-progress-fill {
+    @apply h-full bg-gradient-to-r from-forge-accent2 to-forge-accent rounded-full
+           transition-all duration-500 ease-out;
+  }
+
+  #mindmap-container svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .report-prose h1 { @apply text-2xl font-bold text-forge-accent mb-4; }
+  .report-prose h2 { @apply text-xl font-semibold text-forge-accent2 mt-6 mb-3; }
+  .report-prose h3 { @apply text-lg font-medium text-forge-text mt-4 mb-2; }
+  .report-prose p { @apply text-forge-muted mb-3 leading-relaxed; }
+  .report-prose ul { @apply list-disc list-inside text-forge-muted mb-3 space-y-1; }
+  .report-prose table { @apply w-full text-sm border-collapse my-4; }
+  .report-prose th { @apply bg-forge-surface text-forge-accent text-left p-2 border border-forge-border; }
+  .report-prose td { @apply p-2 border border-forge-border text-forge-muted; }
+  .report-prose code { @apply font-mono text-forge-accent2 bg-forge-surface px-1 rounded text-xs; }
+  .report-prose hr { @apply border-forge-border my-6; }
+  .report-prose blockquote { @apply border-l-4 border-forge-accent pl-4 text-forge-muted italic; }
 }
