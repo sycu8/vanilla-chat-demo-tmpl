@@ -4,6 +4,14 @@ main = "dist/_worker.js"
 compatibility_date = "2025-01-09"
 compatibility_flags = ["nodejs_compat"]
 
+# Set via env or uncomment after adding your account ID:
+# account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+
+# Optional custom domain (requires zone on your Cloudflare account):
+# [[routes]]
+# pattern = "reconforge.orangecloud.vn/*"
+# zone_name = "orangecloud.vn"
+
 [assets]
 directory = "public"
 binding = "ASSETS"
