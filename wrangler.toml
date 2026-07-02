@@ -1,14 +1,13 @@
-# ReconForge — Cloudflare Pages + Workers configuration
+# ReconForge — Cloudflare Workers + Static Assets configuration
 name = "reconforge"
-pages_build_output_dir = "./dist"
+main = "dist/_worker.js"
 compatibility_date = "2025-01-09"
 compatibility_flags = ["nodejs_compat"]
 
-# Future live recon integrations (uncomment and set via wrangler secret)
-# [vars]
-# SIMULATION_MODE = "true"
+[assets]
+directory = "public"
+binding = "ASSETS"
 
-# Example secrets for production API integrations:
-# wrangler pages secret put SHODAN_API_KEY
-# wrangler pages secret put NVD_API_KEY
-# wrangler pages secret put CRT_SH_API
+# Future live recon integrations (set via wrangler secret after deploy):
+# wrangler secret put SHODAN_API_KEY
+# wrangler secret put NVD_API_KEY
