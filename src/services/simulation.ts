@@ -4,7 +4,7 @@
  * PRODUCTION EXTENSION POINTS:
  * - Replace OSINT phase with Hunter.io, LinkedIn scraping APIs, Shodan
  * - Add SecurityTrails, subfinder for additional subdomain sources
- * - Replace fingerprinting with Wappalyzer API, httpx, nuclei
+ * - Replace fingerprinting with Wappalyzer API, httpx, nuclei (basic live HTTP fingerprinting implemented)
  * - Replace CVE matching with NVD API, Vulners, OSV
  */
 
@@ -12,6 +12,7 @@ import { createRng, domainSeed, extractDomain } from "../lib/domain";
 import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
 import { enumerateSubdomains, enumerateSubdomainsStream } from "./subdomain";
+import { fingerprintHosts, fingerprintHostsStream, formatFingerprint } from "./fingerprint";
 import type {
   LogEntry,
   OsintFinding,
@@ -33,31 +34,19 @@ const PHASES = [
   { id: 5, name: "Intelligence Synthesis" },
 ];
 
-const SERVERS = ["nginx/1.24.0", "Apache/2.4.57", "cloudflare", "Microsoft-IIS/10.0", "Caddy/2.7.0"];
-const FRAMEWORKS = ["React 18.2", "Next.js 14.1", "Django 4.2", "Laravel 10", "Express 4.18", "Spring Boot 3.2", "Ruby on Rails 7.1"];
-const CMS = ["WordPress 6.4", "Drupal 10", "Ghost 5", "Shopify", "Contentful"];
-const HEADERS = [
-  "X-Powered-By", "Strict-Transport-Security", "X-Frame-Options",
-  "Content-Security-Policy", "X-Content-Type-Options", "Server",
-  "X-Request-Id", "CF-Ray", "Set-Cookie", "Access-Control-Allow-Origin",
-];
+const OSINT_JOB_TECH = ["React", "Next.js", "Django", "Laravel", "Express", "Spring Boot", "Kubernetes"];
 
-const CVE_DB: Omit<Vulnerability, "technology">[] = [
-  { cve: "CVE-2024-21762", severity: "high", description: "Out-of-bounds write in FortiOS SSL VPN", cvss: 9.8 },
-  { cve: "CVE-2023-44487", severity: "high", description: "HTTP/2 Rapid Reset attack", cvss: 7.5 },
-  { cve: "CVE-2024-23897", severity: "high", description: "Jenkins arbitrary file read", cvss: 9.8 },
-  { cve: "CVE-2023-4966", severity: "high", description: "Citrix Bleed sensitive info disclosure", cvss: 9.4 },
-  { cve: "CVE-2024-3400", severity: "high", description: "Palo Alto PAN-OS command injection", cvss: 10.0 },
-  { cve: "CVE-2023-22515", severity: "medium", description: "Atlassian Confluence broken access control", cvss: 7.3 },
-  { cve: "CVE-2024-21413", severity: "medium", description: "Microsoft Outlook MonikerLink RCE", cvss: 8.8 },
-  { cve: "CVE-2023-38545", severity: "medium", description: "curl SOCKS5 heap buffer overflow", cvss: 7.5 },
-  { cve: "CVE-2024-1086", severity: "medium", description: "Linux kernel netfilter use-after-free", cvss: 7.8 },
-  { cve: "CVE-2023-20198", severity: "high", description: "Cisco IOS XE web UI privilege escalation", cvss: 10.0 },
-  { cve: "CVE-2024-27198", severity: "high", description: "JetBrains TeamCity auth bypass", cvss: 9.8 },
-  { cve: "CVE-2023-46747", severity: "medium", description: "F5 BIG-IP unauthenticated RCE", cvss: 9.8 },
-  { cve: "CVE-2024-21893", severity: "medium", description: "Ivanti Connect Secure SSRF", cvss: 8.2 },
-  { cve: "CVE-2023-7028", severity: "info", description: "GitLab account takeover via password reset", cvss: 6.5 },
-  { cve: "CVE-2024-22024", severity: "info", description: "Information disclosure in logging module", cvss: 4.3 },
+const CVE_DB: (Omit<Vulnerability, "technology"> & { tags: string[] })[] = [
+  { cve: "CVE-2023-44487", severity: "high", description: "HTTP/2 Rapid Reset attack", cvss: 7.5, tags: ["cloudflare", "nginx", "next.js", "http"] },
+  { cve: "CVE-2024-23897", severity: "high", description: "Jenkins arbitrary file read", cvss: 9.8, tags: ["jenkins"] },
+  { cve: "CVE-2023-22515", severity: "medium", description: "Atlassian Confluence broken access control", cvss: 7.3, tags: ["confluence", "atlassian"] },
+  { cve: "CVE-2024-27198", severity: "high", description: "JetBrains TeamCity auth bypass", cvss: 9.8, tags: ["teamcity", "jetbrains"] },
+  { cve: "CVE-2023-7028", severity: "info", description: "GitLab account takeover via password reset", cvss: 6.5, tags: ["gitlab"] },
+  { cve: "CVE-2023-4966", severity: "high", description: "Citrix Bleed sensitive info disclosure", cvss: 9.4, tags: ["citrix"] },
+  { cve: "CVE-2024-3400", severity: "high", description: "Palo Alto PAN-OS command injection", cvss: 10.0, tags: ["palo", "pan-os"] },
+  { cve: "CVE-2023-38545", severity: "medium", description: "curl SOCKS5 heap buffer overflow", cvss: 7.5, tags: ["curl"] },
+  { cve: "CVE-2024-1086", severity: "medium", description: "Linux kernel netfilter use-after-free", cvss: 7.8, tags: ["linux"] },
+  { cve: "CVE-2024-21413", severity: "medium", description: "Microsoft Outlook MonikerLink RCE", cvss: 8.8, tags: ["microsoft", "exchange"] },
 ];
 
 const PHISHING_LURES = [
@@ -114,7 +103,7 @@ function generateOsint(
     },
     {
       category: "Tech Mentions",
-      detail: `Job postings reference: ${rng.pick(FRAMEWORKS)}, ${rng.pick(["AWS", "Azure", "GCP"])}, ${rng.pick(["Kubernetes", "Docker", "Terraform"])}`,
+      detail: `Job postings reference: ${rng.pick(OSINT_JOB_TECH)}, ${rng.pick(["AWS", "Azure", "GCP"])}, ${rng.pick(["Kubernetes", "Docker", "Terraform"])}`,
       risk: "info",
     },
     {
@@ -137,37 +126,45 @@ function generateOsint(
   return findings;
 }
 
-function generateFingerprints(
-  subdomains: SubdomainEntry[],
-  rng: ReturnType<typeof createRng>
-): TechFingerprint[] {
-  return subdomains.map((sub) => ({
-    host: sub.host,
-    server: rng.pick(SERVERS),
-    framework: rng.next() > 0.3 ? rng.pick(FRAMEWORKS) : undefined,
-    cms: rng.next() > 0.7 ? rng.pick(CMS) : undefined,
-    version: rng.next() > 0.5 ? `${rng.int(1, 9)}.${rng.int(0, 9)}.${rng.int(0, 20)}` : undefined,
-    headers: rng.shuffle(HEADERS).slice(0, rng.int(3, 6)),
-  }));
+function stackLabel(fp: TechFingerprint): string {
+  return [fp.framework, fp.cms, fp.server, fp.version].filter(Boolean).join(" / ") || "Unknown Stack";
 }
 
-function generateVulnerabilities(
+function stackHaystack(fp: TechFingerprint): string {
+  return `${fp.host} ${stackLabel(fp)} ${fp.headers.join(" ")}`.toLowerCase();
+}
+
+function matchVulnerabilities(
   fingerprints: TechFingerprint[],
-  depth: ScanDepth,
-  rng: ReturnType<typeof createRng>
+  depth: ScanDepth
 ): Vulnerability[] {
-  const count = depth === "deep" ? rng.int(8, 14) : rng.int(4, 8);
-  const cves = rng.shuffle(CVE_DB).slice(0, count);
-  return cves.map((cve, i) => ({
-    ...cve,
-    technology: [
-      fingerprints[i % fingerprints.length]?.framework,
-      fingerprints[i % fingerprints.length]?.cms,
-      fingerprints[i % fingerprints.length]?.server,
-    ]
-      .filter(Boolean)
-      .join(" / ") || "Unknown Stack",
-  }));
+  const max = depth === "deep" ? 10 : 6;
+  const matched: Vulnerability[] = [];
+  const seen = new Set<string>();
+
+  for (const fp of fingerprints) {
+    const haystack = stackHaystack(fp);
+    const tech = stackLabel(fp);
+
+    for (const entry of CVE_DB) {
+      if (seen.has(entry.cve)) continue;
+      const hit = entry.tags.some((tag) => haystack.includes(tag));
+      if (hit) {
+        const { tags: _tags, ...cve } = entry;
+        matched.push({ ...cve, technology: tech });
+        seen.add(entry.cve);
+      }
+    }
+  }
+
+  // HTTP/2 Rapid Reset applies to any live HTTPS web stack behind Cloudflare/modern servers
+  if (!seen.has("CVE-2023-44487") && fingerprints.length) {
+    const fp = fingerprints[0];
+    const { tags: _tags, ...cve } = CVE_DB[0];
+    matched.push({ ...cve, technology: stackLabel(fp) });
+  }
+
+  return matched.slice(0, max);
 }
 
 function calculateRiskScore(vulns: Vulnerability[], subdomains: SubdomainEntry[]): number {
@@ -339,14 +336,42 @@ export async function* runReconScan(
     type: "phase",
     data: { phase: 3, name: PHASES[2].name, status: "running", progress: 40, detail: "Probing HTTP headers..." },
   };
-  yield { type: "log", data: log(3, "info", "Probing HTTP headers and technology signatures...") };
-  await delay(400);
+  yield { type: "log", data: log(3, "info", "[LIVE] Probing HTTP headers and HTML technology signatures...") };
 
-  const fingerprints = generateFingerprints(subdomains, rng);
-  for (const fp of fingerprints.slice(0, request.depth === "deep" ? 15 : 8)) {
-    const stack = [fp.server, fp.framework, fp.cms, fp.version].filter(Boolean).join(" | ");
-    yield { type: "log", data: log(3, "success", `${fp.host}: ${stack}`) };
-    await delay(180);
+  const fingerprints: TechFingerprint[] = [];
+  const hosts = subdomains.map((s) => s.host);
+
+  for await (const event of fingerprintHostsStream(hosts, request.depth)) {
+    if (event.kind === "status") {
+      yield {
+        type: "phase",
+        data: { phase: 3, name: PHASES[2].name, status: "running", progress: 42, detail: event.message },
+      };
+      yield { type: "log", data: log(3, "info", event.message) };
+      continue;
+    }
+    if (event.kind === "progress") {
+      const phasePct = 40 + Math.floor((event.current / Math.max(event.total, 1)) * 18);
+      yield {
+        type: "phase",
+        data: {
+          phase: 3,
+          name: PHASES[2].name,
+          status: "running",
+          progress: phasePct,
+          detail: `Fingerprinting ${event.host} (${event.current}/${event.total})...`,
+        },
+      };
+      continue;
+    }
+    if (event.kind === "fingerprint") {
+      fingerprints.push(event.entry);
+      const summary = formatFingerprint(event.entry);
+      yield {
+        type: "log",
+        data: log(3, summary === "no signatures detected" ? "warn" : "success", `${event.entry.host}: ${summary}`),
+      };
+    }
   }
 
   yield {
@@ -362,7 +387,7 @@ export async function* runReconScan(
   yield { type: "log", data: log(4, "info", "Cross-referencing tech stack against CVE databases (NVD, OSV)...") };
   await delay(450);
 
-  const vulnerabilities = generateVulnerabilities(fingerprints, request.depth, rng);
+  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth);
   for (const vuln of vulnerabilities) {
     yield {
       type: "log",
@@ -446,8 +471,11 @@ export async function buildReportFromRequest(request: ScanRequest): Promise<Reco
   const rng = createRng(domainSeed(domain));
   const osint = generateOsint(domain, request.keywords, rng);
   const subdomains = await enumerateSubdomains(domain, { depth: request.depth });
-  const fingerprints = generateFingerprints(subdomains, rng);
-  const vulnerabilities = generateVulnerabilities(fingerprints, request.depth, rng);
+  const fingerprints = await fingerprintHosts(
+    subdomains.map((s) => s.host),
+    request.depth
+  );
+  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth);
   const riskScore = calculateRiskScore(vulnerabilities, subdomains);
   const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "info";
   const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, riskScore, rng);

@@ -68,6 +68,23 @@ async function testReport() {
     if (!sub.ip || sub.ip === "0.0.0.0") return fail("report", `${sub.host} missing IP`);
   }
   ok(`POST /api/recon/report (${report.subdomains.length} live subdomains, risk ${report.riskScore})`);
+
+  const fps = report.fingerprints || [];
+  const rootFp = fps.find((f) => f.host === TARGET);
+  if (!rootFp) return fail("fingerprints", `missing root host ${TARGET}`);
+  const rootStack = [rootFp.framework, rootFp.server, rootFp.version].filter(Boolean).join(" ").toLowerCase();
+  if (!rootStack.includes("astro") && !rootStack.includes("cloudflare")) {
+    return fail("fingerprints", `root tech unexpected: ${rootStack || "(empty)"}`);
+  }
+  const blogFp = fps.find((f) => f.host === "blog.orangecloud.vn");
+  if (blogFp) {
+    const blogStack = [blogFp.framework, blogFp.server].filter(Boolean).join(" ").toLowerCase();
+    if (!blogStack.includes("next")) {
+      return fail("fingerprints", `blog.orangecloud.vn expected Next.js, got: ${blogStack || "(empty)"}`);
+    }
+  }
+  ok(`fingerprints (${fps.length} hosts, root=${rootStack.trim()})`);
+
   return report;
 }
 
