@@ -20,7 +20,7 @@ export const CVE_CATALOG: CveCatalogEntry[] = [
     severity: "high",
     description: "HTTP/2 Rapid Reset attack — denial of service via stream cancellation",
     cvss: 7.5,
-    tags: ["cloudflare", "nginx", "next.js", "http", "astro"],
+    tags: ["nginx", "next.js", "astro"],
     remediation:
       "Keep Cloudflare proxy enabled (orange-to-cloud) so edge mitigations apply. Patch origin web servers (nginx ≥1.25.3, Apache ≥2.4.58) if they terminate HTTP/2 directly. Enable rate limiting and monitor for abnormal HTTP/2 connection churn.",
   },
@@ -131,23 +131,89 @@ const SEVERITY_RANK: Record<Vulnerability["severity"], number> = {
   info: 2,
 };
 
+/** Tags matched against hostname / subdomain labels only */
+const HOSTNAME_TAGS = new Set([
+  "jenkins",
+  "gitlab",
+  "confluence",
+  "atlassian",
+  "teamcity",
+  "jetbrains",
+  "citrix",
+  "globalprotect",
+  "palo",
+  "pan-os",
+  "microsoft",
+  "exchange",
+  "outlook",
+  "owa",
+  "curl",
+  "linux",
+]);
+
 function stackLabel(fp: TechFingerprint): string {
   return [fp.framework, fp.cms, fp.server, fp.version].filter(Boolean).join(" / ") || "Unknown Stack";
 }
 
-function hostLabels(host: string, domain: string): string {
-  if (host === domain) return "root www apex";
-  const suffix = `.${domain}`;
+function hostLabels(host: string, apex: string): string {
+  if (host === apex) return "root www apex";
+  const suffix = `.${apex}`;
   if (!host.endsWith(suffix)) return host;
   return host.slice(0, -suffix.length).replace(/\./g, " ");
 }
 
-function matchHaystack(fp: TechFingerprint, domain: string): string {
-  return `${fp.host} ${hostLabels(fp.host, domain)} ${stackLabel(fp)} ${fp.headers.join(" ")}`.toLowerCase();
+function originServer(fp: TechFingerprint): string {
+  const raw = (fp.server || "").toLowerCase();
+  const parts = raw.split("/").map((p) => p.trim());
+  return parts.find((p) => /nginx|apache|caddy|express|php|iis/.test(p)) || raw;
 }
 
-function cveMatchesHost(entry: CveCatalogEntry, haystack: string): boolean {
-  return entry.tags.some((tag) => haystack.includes(tag));
+function includesToken(haystack: string, token: string): boolean {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[\\s/|])${escaped}(?:[\\s/|.]|$)`, "i").test(haystack);
+}
+
+function cveMatchesHost(entry: CveCatalogEntry, fp: TechFingerprint, apex: string): boolean {
+  const hostHay = `${fp.host} ${hostLabels(fp.host, apex)}`.toLowerCase();
+  const framework = (fp.framework || "").toLowerCase();
+  const cms = (fp.cms || "").toLowerCase();
+  const server = originServer(fp);
+  const headerText = fp.headers.join(" ").toLowerCase();
+
+  for (const tag of entry.tags) {
+    const t = tag.toLowerCase();
+
+    if (HOSTNAME_TAGS.has(t)) {
+      if (hostHay.includes(t)) return true;
+      continue;
+    }
+
+    if (t === "next.js" || t === "nextjs") {
+      if (framework.includes("next") || headerText.includes("nextjs") || headerText.includes("x-nextjs")) {
+        return true;
+      }
+      continue;
+    }
+
+    if (t === "astro") {
+      if (framework.includes("astro") || headerText.includes("astro")) return true;
+      continue;
+    }
+
+    if (t === "nginx") {
+      if (server.includes("nginx") || headerText.includes("nginx")) return true;
+      continue;
+    }
+
+    if (t === "confluence" || t === "atlassian") {
+      if (cms.includes("confluence") || framework.includes("confluence")) return true;
+      continue;
+    }
+
+    if (framework.includes(t) || cms.includes(t) || includesToken(server, t)) return true;
+  }
+
+  return false;
 }
 
 function sortVulnerabilities(vulns: Vulnerability[]): Vulnerability[] {
@@ -191,21 +257,20 @@ export function groupVulnerabilitiesByHost(vulnerabilities: Vulnerability[]): Vu
 export function matchVulnerabilities(
   fingerprints: TechFingerprint[],
   depth: ScanDepth,
-  domain?: string
+  apex?: string
 ): Vulnerability[] {
   const max = depth === "deep" ? 30 : 18;
   const matched: Vulnerability[] = [];
   const seen = new Set<string>();
-  const apex = domain || fingerprints[0]?.host || "";
+  const domain = apex || fingerprints[0]?.host || "";
 
   for (const fp of fingerprints) {
-    const haystack = matchHaystack(fp, apex);
     const tech = stackLabel(fp);
 
     for (const entry of CVE_CATALOG) {
       const key = `${entry.cve}:${fp.host}`;
       if (seen.has(key)) continue;
-      if (!cveMatchesHost(entry, haystack)) continue;
+      if (!cveMatchesHost(entry, fp, domain)) continue;
 
       const { tags: _tags, ...cve } = entry;
       matched.push({ ...cve, host: fp.host, technology: tech });

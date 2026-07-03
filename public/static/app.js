@@ -550,12 +550,12 @@ async function onScanComplete(slimReport) {
   showToast("Reconnaissance complete!", "success");
   setProgress(100);
 
-  // Fetch full report (markdown + html) — SSE omits large fields for reliability
+  // Enrich slim SSE report with markdown/html — no second full scan
   try {
-    const res = await fetch("/api/recon/report", {
+    const res = await fetch("/api/recon/enrich", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(lastScanPayload),
+      body: JSON.stringify({ report: slimReport }),
     });
     if (res.ok) {
       const { report } = await res.json();
@@ -623,21 +623,25 @@ $("#btn-regenerate").addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        target: currentReport.target,
-        keywords: currentReport.keywords.join(", "),
-        depth: currentReport.depth,
-        simulation: currentReport.simulation,
+        report: currentReport,
         variant: mindmapVariant,
       }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || `Mindmap failed (HTTP ${res.status})`, "error");
+      return;
+    }
     const data = await res.json();
     if (data.mindmap) {
       currentReport.mindmap = data.mindmap;
       await renderMindmap(data.mindmap);
       showToast("Mindmap regenerated", "success");
+    } else {
+      showToast("No mindmap data returned", "error");
     }
-  } catch {
-    showToast("Failed to regenerate mindmap", "error");
+  } catch (err) {
+    showToast(`Failed to regenerate mindmap: ${err.message}`, "error");
   }
 });
 

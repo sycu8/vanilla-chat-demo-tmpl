@@ -6,8 +6,9 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { extractDomain, isValidDomain } from "../lib/domain";
 import { regenerateMindmap } from "../lib/mindmap";
+import { enrichReport } from "../lib/report";
 import { buildReportFromRequest, runReconScan } from "../services/simulation";
-import type { ScanRequest } from "../lib/types";
+import type { ReconReport, ScanRequest } from "../lib/types";
 
 const recon = new Hono();
 
@@ -96,17 +97,45 @@ recon.post("/mindmap", async (c) => {
     return c.json({ error: "Malformed JSON body" }, 400);
   }
 
+  const raw = body as Record<string, unknown>;
+  const variant = Number(raw.variant) || 0;
+
+  if (raw.report && typeof raw.report === "object") {
+    const report = raw.report as ReconReport;
+    const mindmap = regenerateMindmap(report, variant);
+    return c.json({ mindmap });
+  }
+
   const parsed = parseScanRequest(body);
   if ("error" in parsed) {
     return c.json({ error: parsed.error }, 400);
   }
 
-  const raw = body as Record<string, unknown>;
-  const variant = Number(raw.variant) || 0;
   const report = await buildReportFromRequest(parsed);
   const mindmap = regenerateMindmap(report, variant);
 
   return c.json({ mindmap, report });
+});
+
+/**
+ * POST /api/recon/enrich
+ * Add markdown/html to an existing scan report (no re-scan).
+ */
+recon.post("/enrich", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Malformed JSON body" }, 400);
+  }
+
+  const raw = body as Record<string, unknown>;
+  if (!raw.report || typeof raw.report !== "object") {
+    return c.json({ error: "Missing report object" }, 400);
+  }
+
+  const report = enrichReport(raw.report as ReconReport);
+  return c.json({ report });
 });
 
 /**

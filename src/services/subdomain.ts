@@ -520,7 +520,7 @@ async function verifyHost(
   return {
     host,
     ip,
-    status: status || 200,
+    status,
     services: inferServices(host, domain),
   };
 }

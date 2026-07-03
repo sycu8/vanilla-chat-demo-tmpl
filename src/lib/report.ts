@@ -5,6 +5,14 @@
 import type { ReconReport, RiskLevel } from "./types";
 import { groupVulnerabilitiesByHost } from "./cve";
 
+function escapeHtml(text: string): string {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function riskBadge(level: RiskLevel): string {
   const colors: Record<RiskLevel, string> = {
     high: "#ef4444",
@@ -139,14 +147,14 @@ export function generateHtml(report: ReconReport): string {
   const osintRows = report.osint
     .map(
       (f) =>
-        `<tr><td>${f.category}</td><td>${f.detail}</td><td>${riskBadge(f.risk)}</td></tr>`
+        `<tr><td>${escapeHtml(f.category)}</td><td>${escapeHtml(f.detail)}</td><td>${riskBadge(f.risk)}</td></tr>`
     )
     .join("");
 
   const subdomainRows = report.subdomains
     .map(
       (s) =>
-        `<tr><td><code>${s.host}</code></td><td>${s.services.join(", ")}</td><td>${s.ip}</td><td>${s.status}</td></tr>`
+        `<tr><td><code>${escapeHtml(s.host)}</code></td><td>${escapeHtml(s.services.join(", "))}</td><td>${escapeHtml(s.ip)}</td><td>${s.status || "DNS"}</td></tr>`
     )
     .join("");
 
@@ -154,13 +162,13 @@ export function generateHtml(report: ReconReport): string {
     .map(
       (v) =>
         `<tr>
-          <td><code>${v.cve}</code></td>
+          <td><code>${escapeHtml(v.cve)}</code></td>
           <td>${riskBadge(v.severity)}</td>
-          <td><code>${v.host}</code></td>
-          <td>${v.technology}</td>
+          <td><code>${escapeHtml(v.host)}</code></td>
+          <td>${escapeHtml(v.technology)}</td>
           <td>${v.cvss}</td>
-          <td>${v.description}</td>
-          <td class="remediation">${v.remediation}</td>
+          <td>${escapeHtml(v.description)}</td>
+          <td class="remediation">${escapeHtml(v.remediation)}</td>
         </tr>`
     )
     .join("");
@@ -168,25 +176,25 @@ export function generateHtml(report: ReconReport): string {
   const vulnerableHostRows = groupVulnerabilitiesByHost(report.vulnerabilities)
     .map(
       (row) =>
-        `<tr><td><code>${row.host}</code></td><td>${row.cves.map((c) => `<code>${c}</code>`).join(", ")}</td><td>${riskBadge(row.maxSeverity)}</td></tr>`
+        `<tr><td><code>${escapeHtml(row.host)}</code></td><td>${row.cves.map((c) => `<code>${escapeHtml(c)}</code>`).join(", ")}</td><td>${riskBadge(row.maxSeverity)}</td></tr>`
     )
     .join("");
 
   const exposureRows = (report.securityFindings || [])
     .map(
       (f) =>
-        `<tr><td><code>${f.host}</code></td><td>${f.category}</td><td>${riskBadge(f.severity)}</td><td>${f.title}</td><td class="remediation">${f.remediation}</td></tr>`
+        `<tr><td><code>${escapeHtml(f.host)}</code></td><td>${escapeHtml(f.category)}</td><td>${riskBadge(f.severity)}</td><td>${escapeHtml(f.title)}</td><td class="remediation">${escapeHtml(f.remediation)}</td></tr>`
     )
     .join("");
 
   const dnsRows = (report.dnsRecords || [])
-    .map((r) => `<tr><td>${r.type}</td><td><code>${r.name}</code></td><td>${r.value.slice(0, 100)}</td><td>${riskBadge(r.risk)}</td></tr>`)
+    .map((r) => `<tr><td>${escapeHtml(r.type)}</td><td><code>${escapeHtml(r.name)}</code></td><td>${escapeHtml(r.value.slice(0, 100))}</td><td>${riskBadge(r.risk)}</td></tr>`)
     .join("");
 
   const synthesisBlocks = report.synthesis
     .map(
       (s) =>
-        `<div class="insight ${s.priority}"><h4>${riskEmoji(s.priority)} ${s.title}</h4><p>${s.detail}</p></div>`
+        `<div class="insight ${s.priority}"><h4>${riskEmoji(s.priority)} ${escapeHtml(s.title)}</h4><p>${escapeHtml(s.detail)}</p></div>`
     )
     .join("");
 
@@ -230,7 +238,7 @@ export function generateHtml(report: ReconReport): string {
   <div class="header">
     <h1>ReconForge Security Assessment</h1>
     <div class="meta">
-      Target: <strong>${report.target}</strong> · Domain: <strong>${report.domain}</strong><br>
+      Target: <strong>${escapeHtml(report.target)}</strong> · Domain: <strong>${escapeHtml(report.domain)}</strong><br>
       Depth: ${report.depth} · Mode: ${report.simulation ? "Simulation" : "Live"} · ${report.completedAt}
     </div>
   </div>
@@ -241,7 +249,7 @@ export function generateHtml(report: ReconReport): string {
       <div class="score-value">${report.riskScore}</div>
     </div>
     <div>
-      <p>${report.summary}</p>
+      <p>${escapeHtml(report.summary)}</p>
     </div>
   </div>
 
@@ -258,7 +266,7 @@ export function generateHtml(report: ReconReport): string {
     ${report.fingerprints
       .map(
         (fp) =>
-          `<tr><td><code>${fp.host}</code></td><td>${[fp.server, fp.framework, fp.cms, fp.version].filter(Boolean).join(" / ")}</td><td>${fp.headers.join(", ")}</td></tr>`
+          `<tr><td><code>${escapeHtml(fp.host)}</code></td><td>${escapeHtml([fp.server, fp.framework, fp.cms, fp.version].filter(Boolean).join(" / "))}</td><td>${escapeHtml(fp.headers.join(", "))}</td></tr>`
       )
       .join("")}
   </tbody></table>

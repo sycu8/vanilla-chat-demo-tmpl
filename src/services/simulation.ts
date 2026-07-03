@@ -14,7 +14,7 @@ import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
 import { enumerateDnsRecords, dnsRecordsToOsint } from "./dns-intel";
 import { scanExposure, scanExposureStream } from "./exposure";
-import { enumerateSubdomains, enumerateSubdomainsStream } from "./subdomain";
+import { enumerateSubdomains, enumerateSubdomainsStream, getApexDomain } from "./subdomain";
 import { fingerprintHosts, fingerprintHostsStream, formatFingerprint } from "./fingerprint";
 import type {
   LogEntry,
@@ -71,7 +71,7 @@ function generateOsint(
   keywords: string[],
   rng: ReturnType<typeof createRng>
 ): OsintFinding[] {
-  const company = domain.split(".")[0];
+  const company = getApexDomain(domain).split(".")[0];
   const findings: OsintFinding[] = [
     {
       category: "Company Profile",
@@ -121,7 +121,8 @@ function generateOsint(
 function calculateRiskScore(
   vulns: Vulnerability[],
   subdomains: SubdomainEntry[],
-  securityFindings: SecurityFinding[] = []
+  securityFindings: SecurityFinding[] = [],
+  dnsRecords: DnsRecord[] = []
 ): number {
   let score = 0;
   for (const v of vulns) {
@@ -134,7 +135,21 @@ function calculateRiskScore(
     else if (f.severity === "medium") score += 6;
     else score += 2;
   }
-  const exposed = subdomains.filter((s) => s.status === 200 && !s.host.startsWith("www.")).length;
+
+  const hasSpf = dnsRecords.some((r) => r.type === "TXT" && r.value.toLowerCase().includes("v=spf1"));
+  const hasDmarc = dnsRecords.some(
+    (r) => r.type === "DMARC" || r.value.toLowerCase().includes("v=dmarc1")
+  );
+  if (!hasSpf) score += 4;
+  if (!hasDmarc) score += 4;
+  const permissiveSpf = dnsRecords.find(
+    (r) => r.type === "TXT" && r.value.includes("+all") && r.value.toLowerCase().includes("v=spf1")
+  );
+  if (permissiveSpf) score += 8;
+
+  const exposed = subdomains.filter(
+    (s) => s.status >= 200 && s.status < 400 && !s.host.startsWith("www.")
+  ).length;
   score += Math.min(exposed * 2, 20);
   return Math.min(100, Math.max(10, score));
 }
@@ -167,8 +182,8 @@ function generateSynthesis(
       priority: "high",
     },
     {
-      title: "Critical Vulnerability Exposure",
-      detail: `${highVulns} critical/high CVE findings across ${new Set(vulns.filter((v) => v.severity === "high").map((v) => v.host)).size} vulnerable host(s). See Phase 4 for per-subdomain remediation.`,
+      title: "High-Severity CVE Exposure",
+      detail: `${highVulns} high-severity CVE finding(s) across ${new Set(vulns.filter((v) => v.severity === "high").map((v) => v.host)).size} vulnerable host(s). See Phase 4 for per-subdomain remediation.`,
       priority: highVulns > 2 ? "high" : "medium",
     },
     {
@@ -178,7 +193,7 @@ function generateSynthesis(
     },
     {
       title: "Recommended Next Steps",
-      detail: `1) Validate ${adminPanels.length} admin endpoints behind MFA\n2) Patch ${highVulns} critical CVEs\n3) Fix ${highExposure} high-severity exposure issues\n4) Review subdomain sprawl (${subdomains.length} hosts)`,
+      detail: `1) Validate ${adminPanels.length} admin endpoints behind MFA\n2) Patch ${highVulns} high-severity CVEs\n3) Fix ${highExposure} high-severity exposure issues\n4) Review subdomain sprawl (${subdomains.length} hosts)`,
       priority: riskScore > 60 ? "high" : "medium",
     },
     {
@@ -202,6 +217,7 @@ export async function* runReconScan(
   request: ScanRequest
 ): AsyncGenerator<ScanEvent> {
   const domain = extractDomain(request.target);
+  const apex = getApexDomain(domain);
   const seed = domainSeed(domain);
   const rng = createRng(seed);
   const scanId = `rf-${seed.toString(36)}-${Date.now().toString(36)}`;
@@ -215,7 +231,7 @@ export async function* runReconScan(
     data: { phase: 1, name: PHASES[0].name, status: "running", progress: 0, detail: "Collecting OSINT..." },
   };
   yield { type: "log", data: log(1, "info", `[LIVE] Querying DNS records (MX, TXT, SPF, DMARC, NS)...`) };
-  const dnsRecords: DnsRecord[] = await enumerateDnsRecords(domain);
+  const dnsRecords: DnsRecord[] = await enumerateDnsRecords(apex);
   const liveOsint = dnsRecordsToOsint(dnsRecords);
   for (const finding of liveOsint) {
     yield {
@@ -371,7 +387,7 @@ export async function* runReconScan(
   yield { type: "log", data: log(4, "info", "Cross-referencing tech stack against CVE databases (NVD, OSV)...") };
   await delay(300);
 
-  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, domain);
+  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, apex);
   for (const vuln of vulnerabilities) {
     yield {
       type: "log",
@@ -385,13 +401,12 @@ export async function* runReconScan(
       type: "log",
       data: log(4, "success", `  ↳ Remediation: ${vuln.remediation}`),
     };
-    await delay(150);
   }
 
-  yield { type: "log", data: log(4, "info", "[LIVE] Running Nuclei-style exposure checks (headers, DNS, sensitive paths)...") };
+  yield { type: "log", data: log(4, "info", "[LIVE] Running Nuclei-style exposure checks (headers, sensitive paths)...") };
 
   const securityFindings: SecurityFinding[] = [];
-  for await (const event of scanExposureStream(fingerprints, dnsRecords, domain, request.depth)) {
+  for await (const event of scanExposureStream(fingerprints, dnsRecords, apex, request.depth)) {
     if (event.kind === "status") {
       yield {
         type: "phase",
@@ -409,7 +424,6 @@ export async function* runReconScan(
         `[${event.entry.category.toUpperCase()}] ${event.entry.host}: ${event.entry.title}`
       ),
     };
-    await delay(100);
   }
 
   yield {
@@ -425,7 +439,7 @@ export async function* runReconScan(
   yield { type: "log", data: log(5, "info", "Synthesizing intelligence and computing risk score...") };
   await delay(400);
 
-  const riskScore = calculateRiskScore(vulnerabilities, subdomains, securityFindings);
+  const riskScore = calculateRiskScore(vulnerabilities, subdomains, securityFindings, dnsRecords);
   const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "info";
   const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, securityFindings, riskScore, rng);
 
@@ -440,7 +454,7 @@ export async function* runReconScan(
   const completedAt = now();
   const highVulns = vulnerabilities.filter((v) => v.severity === "high").length;
   const highExposure = securityFindings.filter((f) => f.severity === "high").length;
-  const summary = `Reconnaissance of ${domain} identified ${subdomains.length} live hosts, ${highVulns} critical CVEs on ${new Set(vulnerabilities.map((v) => v.host)).size} hosts, ${securityFindings.length} exposure findings (${highExposure} high), and a composite risk score of ${riskScore}/100.`;
+  const summary = `Reconnaissance of ${domain} identified ${subdomains.length} live hosts, ${highVulns} high-severity CVEs on ${new Set(vulnerabilities.map((v) => v.host)).size} hosts, ${securityFindings.length} exposure findings (${highExposure} high), and a composite risk score of ${riskScore}/100.`;
 
   let report: ReconReport = {
     id: scanId,
@@ -484,8 +498,9 @@ export async function* runReconScan(
 /** Generate report (for regenerate mindmap / report endpoints) */
 export async function buildReportFromRequest(request: ScanRequest): Promise<ReconReport> {
   const domain = extractDomain(request.target);
+  const apex = getApexDomain(domain);
   const rng = createRng(domainSeed(domain));
-  const dnsRecords = await enumerateDnsRecords(domain);
+  const dnsRecords = await enumerateDnsRecords(apex);
   const liveOsint = dnsRecordsToOsint(dnsRecords);
   const simOsint = request.simulation ? generateOsint(domain, request.keywords, rng) : [];
   const osint = [...liveOsint, ...simOsint];
@@ -494,9 +509,9 @@ export async function buildReportFromRequest(request: ScanRequest): Promise<Reco
     subdomains.map((s) => s.host),
     request.depth
   );
-  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, domain);
-  const securityFindings = await scanExposure(fingerprints, dnsRecords, domain, request.depth);
-  const riskScore = calculateRiskScore(vulnerabilities, subdomains, securityFindings);
+  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, apex);
+  const securityFindings = await scanExposure(fingerprints, dnsRecords, apex, request.depth);
+  const riskScore = calculateRiskScore(vulnerabilities, subdomains, securityFindings, dnsRecords);
   const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "info";
   const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, securityFindings, riskScore, rng);
 

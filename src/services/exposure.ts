@@ -88,7 +88,7 @@ const EXPOSURE_PATHS: {
     path: "/debug",
     title: "Debug endpoint reachable",
     severity: "high",
-    match: (s) => s === 200 || s === 401,
+    match: (s, b) => s === 200 && /debug|traceback|stack trace|exception/i.test(b),
     remediation: "Disable debug routes in production; restrict by IP allowlist if required internally.",
   },
   {
@@ -134,18 +134,6 @@ function headerFindings(fp: TechFingerprint): SecurityFinding[] {
     });
   }
 
-  if (fp.securityScore !== undefined && fp.securityScore < 40) {
-    findings.push({
-      id: `hdr-score-${fp.host}`,
-      host: fp.host,
-      category: "headers",
-      severity: "medium",
-      title: "Weak security header posture",
-      description: `${fp.host} security header score: ${fp.securityScore}/100`,
-      remediation: "Implement HSTS, CSP, X-Frame-Options, and X-Content-Type-Options on all public endpoints.",
-    });
-  }
-
   if (fp.server && /nginx\/[\d.]+|apache\/[\d.]+/i.test(fp.server)) {
     findings.push({
       id: `info-server-${fp.host}`,
@@ -183,60 +171,6 @@ async function pathFindings(host: string, maxChecks: number): Promise<SecurityFi
   return findings;
 }
 
-function dnsFindings(records: DnsRecord[], domain: string): SecurityFinding[] {
-  const findings: SecurityFinding[] = [];
-
-  const spf = records.find((r) => r.type === "TXT" && r.value.toLowerCase().includes("v=spf1"));
-  if (!spf) {
-    findings.push({
-      id: `dns-spf-${domain}`,
-      host: domain,
-      category: "dns",
-      severity: "medium",
-      title: "Missing SPF record",
-      description: `No SPF TXT record found for ${domain}`,
-      remediation: "Publish an SPF record limiting authorized senders; combine with DKIM and DMARC.",
-    });
-  } else if (spf.risk === "high") {
-    findings.push({
-      id: `dns-spf-permissive-${domain}`,
-      host: domain,
-      category: "dns",
-      severity: "high",
-      title: "Permissive SPF (+all)",
-      description: "SPF record allows any sender (+all)",
-      remediation: "Replace +all with ~all or -all after validating all legitimate mail sources.",
-    });
-  }
-
-  const dmarc = records.find(
-    (r) => r.type === "DMARC" || r.value.toLowerCase().includes("v=dmarc1")
-  );
-  if (!dmarc) {
-    findings.push({
-      id: `dns-dmarc-${domain}`,
-      host: domain,
-      category: "dns",
-      severity: "medium",
-      title: "Missing DMARC record",
-      description: `No DMARC policy at _dmarc.${domain}`,
-      remediation: "Add DMARC with p=none initially, monitor reports, then tighten to quarantine/reject.",
-    });
-  } else if (dmarc.risk === "medium" && dmarc.value.toLowerCase().includes("p=none")) {
-    findings.push({
-      id: `dns-dmarc-none-${domain}`,
-      host: domain,
-      category: "dns",
-      severity: "medium",
-      title: "DMARC policy p=none",
-      description: "DMARC is monitor-only and does not block spoofed email",
-      remediation: "Graduate to p=quarantine or p=reject after reviewing aggregate DMARC reports.",
-    });
-  }
-
-  return findings;
-}
-
 export type ExposureStreamEvent =
   | { kind: "status"; message: string }
   | { kind: "finding"; entry: SecurityFinding };
@@ -244,18 +178,14 @@ export type ExposureStreamEvent =
 /** Run exposure checks across fingerprinted hosts (Nuclei-style, Workers-safe). */
 export async function* scanExposureStream(
   fingerprints: TechFingerprint[],
-  dnsRecords: DnsRecord[],
-  domain: string,
+  _dnsRecords: DnsRecord[],
+  _domain: string,
   depth: "quick" | "deep"
 ): AsyncGenerator<ExposureStreamEvent> {
   const pathChecks = depth === "deep" ? 6 : 4;
   const hosts = fingerprints.filter((fp) => fp.headers[0] !== "probe-failed").slice(0, depth === "deep" ? 15 : 8);
 
   yield { kind: "status", message: `Running exposure checks on ${hosts.length} host(s) (${pathChecks} paths each)...` };
-
-  for (const record of dnsFindings(dnsRecords, domain)) {
-    yield { kind: "finding", entry: record };
-  }
 
   for (const fp of hosts) {
     for (const finding of headerFindings(fp)) {

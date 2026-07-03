@@ -115,7 +115,7 @@ async function testMindmap(report) {
   const res = await fetch(`${BASE}/api/recon/mindmap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...PAYLOAD, variant: 1 }),
+    body: JSON.stringify({ report, variant: 1 }),
   });
   if (!res.ok) return fail("mindmap", `HTTP ${res.status}`);
   const data = await res.json();
