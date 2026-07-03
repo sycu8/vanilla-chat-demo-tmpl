@@ -8,6 +8,7 @@ let currentReport = null;
 let lastScanPayload = null;
 let mindmapVariant = 0;
 let scanRunning = false;
+let scanStreamComplete = false;
 let currentRunningPhase = 0;
 let logEventCount = 0;
 let scanStartedAt = 0;
@@ -452,9 +453,20 @@ function renderHistoryList() {
 
   historyList.querySelectorAll(".history-select").forEach((cb) => {
     cb.addEventListener("change", () => {
+      const checked = [...historyList.querySelectorAll(".history-select:checked")];
+      if (checked.length > 2) {
+        checked[0].checked = false;
+      }
       selectedHistoryIds = [...historyList.querySelectorAll(".history-select:checked")].map((el) => el.dataset.id);
-      if (selectedHistoryIds.length === 2) runScanDiff(selectedHistoryIds[0], selectedHistoryIds[1]);
-      else if (diffPanel) diffPanel.classList.add("hidden");
+      if (selectedHistoryIds.length === 2) {
+        const sorted = selectedHistoryIds
+          .map((id) => scanHistory.find((s) => s.id === id))
+          .filter(Boolean)
+          .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        if (sorted.length === 2) runScanDiff(sorted[0].id, sorted[1].id);
+      } else if (diffPanel) {
+        diffPanel.classList.add("hidden");
+      }
     });
   });
 }
@@ -557,6 +569,7 @@ async function launchScan() {
   setProgress(0);
   setScanActivity("Connecting to recon pipeline...", true);
   scanRunning = true;
+  scanStreamComplete = false;
   startScanTimers();
   touchActivity();
 
@@ -657,6 +670,10 @@ async function streamScan(payload) {
   }
 
   if (buffer.trim()) parseSSEEvent(buffer);
+
+  if (!scanStreamComplete) {
+    throw new Error("Scan stream ended unexpectedly — the server may have timed out. Try Quick Scan or retry.");
+  }
 }
 
 function handleScanEvent(type, data) {
@@ -689,6 +706,7 @@ function handleScanEvent(type, data) {
       appendSubdomainRow(data);
       break;
     case "complete":
+      scanStreamComplete = true;
       onScanComplete(data);
       break;
     case "error":
@@ -886,7 +904,9 @@ function renderDashboard(report) {
 
 function renderReport(report) {
   if (typeof marked !== "undefined" && report.markdown) {
-    reportContent.innerHTML = marked.parse(report.markdown);
+    reportContent.innerHTML = marked.parse(report.markdown, { async: false });
+    // Belt-and-suspenders: strip script tags from rendered HTML
+    reportContent.querySelectorAll("script").forEach((el) => el.remove());
   } else {
     reportContent.innerHTML = `<pre class="text-sm text-forge-muted whitespace-pre-wrap">${escapeHtml(report.markdown || report.summary)}</pre>`;
   }

@@ -13,6 +13,11 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Escape user/remote-derived content for safe Markdown embedding */
+function sanitizeMd(text: string): string {
+  return escapeHtml(String(text || "")).replace(/\|/g, "\\|");
+}
+
 function riskBadge(level: RiskLevel): string {
   const colors: Record<RiskLevel, string> = {
     high: "#ef4444",
@@ -55,7 +60,7 @@ export function generateMarkdown(report: ReconReport): string {
   ];
 
   for (const f of report.osint) {
-    lines.push(`- **${f.category}** [${f.risk}]: ${f.detail}`);
+    lines.push(`- **${sanitizeMd(f.category)}** [${f.risk}]: ${sanitizeMd(f.detail)}`);
   }
 
   if (report.dnsRecords?.length) {
@@ -63,7 +68,7 @@ export function generateMarkdown(report: ReconReport): string {
     lines.push(`| Type | Name | Value | Risk |`);
     lines.push(`|------|------|-------|------|`);
     for (const r of report.dnsRecords) {
-      lines.push(`| ${r.type} | ${r.name} | ${r.value.slice(0, 80)} | ${r.risk} |`);
+      lines.push(`| ${sanitizeMd(r.type)} | ${sanitizeMd(r.name)} | ${sanitizeMd(r.value.slice(0, 80))} | ${r.risk} |`);
     }
   }
 
@@ -81,9 +86,9 @@ export function generateMarkdown(report: ReconReport): string {
     const tech = [fp.server, fp.framework, fp.cms, fp.version]
       .filter(Boolean)
       .join(" / ");
-    lines.push(`### ${fp.host}`);
-    lines.push(`- **Stack:** ${tech || "Unknown"}`);
-    if (fp.title) lines.push(`- **Title:** ${fp.title}`);
+    lines.push(`### ${sanitizeMd(fp.host)}`);
+    lines.push(`- **Stack:** ${sanitizeMd(tech || "Unknown")}`);
+    if (fp.title) lines.push(`- **Title:** ${sanitizeMd(fp.title)}`);
     if (fp.securityScore !== undefined) lines.push(`- **Security Header Score:** ${fp.securityScore}/100`);
     if (fp.missingHeaders?.length) lines.push(`- **Missing Headers:** ${fp.missingHeaders.join(", ")}`);
     lines.push(`- **Headers:** ${fp.headers.join(", ")}`);
@@ -98,17 +103,17 @@ export function generateMarkdown(report: ReconReport): string {
     lines.push(`| Host | CVEs | Max Severity |`);
     lines.push(`|------|------|--------------|`);
     for (const row of vulnerableHosts) {
-      lines.push(`| ${row.host} | ${row.cves.join(", ")} | ${row.maxSeverity.toUpperCase()} |`);
+      lines.push(`| ${sanitizeMd(row.host)} | ${row.cves.map(sanitizeMd).join(", ")} | ${row.maxSeverity.toUpperCase()} |`);
     }
     lines.push(``);
   }
 
   for (const v of report.vulnerabilities) {
-    lines.push(`### ${v.cve} — ${v.severity.toUpperCase()} (CVSS ${v.cvss})`);
-    lines.push(`- **Host:** ${v.host}`);
-    lines.push(`- **Technology:** ${v.technology}`);
-    lines.push(`- **Description:** ${v.description}`);
-    lines.push(`- **Remediation:** ${v.remediation}`);
+    lines.push(`### ${sanitizeMd(v.cve)} — ${v.severity.toUpperCase()} (CVSS ${v.cvss})`);
+    lines.push(`- **Host:** ${sanitizeMd(v.host)}`);
+    lines.push(`- **Technology:** ${sanitizeMd(v.technology)}`);
+    lines.push(`- **Description:** ${sanitizeMd(v.description)}`);
+    lines.push(`- **Remediation:** ${sanitizeMd(v.remediation)}`);
     lines.push(``);
   }
 
@@ -117,13 +122,13 @@ export function generateMarkdown(report: ReconReport): string {
     lines.push(`| Host | Category | Severity | Finding |`);
     lines.push(`|------|----------|----------|---------|`);
     for (const f of report.securityFindings) {
-      lines.push(`| ${f.host} | ${f.category} | ${f.severity.toUpperCase()} | ${f.title} |`);
+      lines.push(`| ${sanitizeMd(f.host)} | ${f.category} | ${f.severity.toUpperCase()} | ${sanitizeMd(f.title)} |`);
     }
     lines.push(``);
     for (const f of report.securityFindings.filter((x) => x.severity !== "info").slice(0, 15)) {
-      lines.push(`#### ${f.title} — ${f.host}`);
-      lines.push(`- **Description:** ${f.description}`);
-      lines.push(`- **Remediation:** ${f.remediation}`);
+      lines.push(`#### ${sanitizeMd(f.title)} — ${sanitizeMd(f.host)}`);
+      lines.push(`- **Description:** ${sanitizeMd(f.description)}`);
+      lines.push(`- **Remediation:** ${sanitizeMd(f.remediation)}`);
       lines.push(``);
     }
   }

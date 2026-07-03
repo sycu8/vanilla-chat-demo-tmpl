@@ -67,8 +67,16 @@ export async function fetchNvdCves(
           if (seen.has(key)) continue;
 
           const desc = cve.descriptions?.find((d) => d.lang === "en")?.value || "No description";
+          const descLower = desc.toLowerCase();
+          const kwLower = keyword.toLowerCase();
+          // Require keyword in description to reduce false positives from broad NVD search
+          if (!descLower.includes(kwLower)) continue;
+
           const metric = cve.metrics?.cvssMetricV31?.[0]?.cvssData || cve.metrics?.cvssMetricV30?.[0]?.cvssData;
           const severity = mapSeverity(metric?.baseSeverity);
+          const cvss = metric?.baseScore || 0;
+          // Skip low-confidence NVD hits (informational with no CVSS signal)
+          if (severity === "info" && cvss < 4) continue;
 
           results.push({
             cve: cve.id,
@@ -76,7 +84,7 @@ export async function fetchNvdCves(
             host: fp.host,
             technology: [fp.framework, fp.cms, fp.server].filter(Boolean).join(" / ") || keyword,
             description: desc.slice(0, 280),
-            cvss: metric?.baseScore || 0,
+            cvss,
             remediation: `Review NVD advisory ${cve.id} and patch ${keyword} on ${fp.host}.`,
           });
           seen.add(key);

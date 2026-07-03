@@ -46,7 +46,6 @@ export async function bruteDirectories(hosts: string[], depth: "quick" | "deep")
   for (const host of hosts.slice(0, hostLimit)) {
     for (const path of paths) {
       const { status, body } = await probePath(host, path);
-      if (status < 200 || status >= 400) continue;
       if (status === 403) {
         findings.push({
           id: `dir-forbidden-${path}-${host}`.replace(/[^a-z0-9-]/gi, "-"),
@@ -59,10 +58,11 @@ export async function bruteDirectories(hosts: string[], depth: "quick" | "deep")
         });
         continue;
       }
+      if (status < 200 || status >= 400) continue;
 
       const interesting =
-        /login|admin|dashboard|graphql|api|backup|config|metrics/i.test(path) ||
-        /graphql|swagger|openapi|admin/i.test(body);
+        /login|admin|dashboard|graphql|backup|config|metrics/i.test(path) ||
+        /graphql|swagger|openapi|admin|login|password/i.test(body);
 
       if (!interesting && path !== "/.well-known/security.txt" && path !== "/security.txt") continue;
 

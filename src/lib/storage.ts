@@ -38,7 +38,11 @@ export async function getCachedReport(env: ReconEnv, id: string): Promise<ReconR
 }
 
 export async function saveScan(env: ReconEnv, report: ReconReport): Promise<void> {
-  await cacheReport(env, report);
+  try {
+    await cacheReport(env, report);
+  } catch {
+    // KV cache is best-effort — always persist to D1
+  }
   if (!env.DB) return;
 
   await env.DB.prepare(

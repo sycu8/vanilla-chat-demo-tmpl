@@ -17,7 +17,10 @@ export interface ScanDiff {
   resolvedExposures: string[];
 }
 
-export function diffReports(base: ReconReport, compare: ReconReport): ScanDiff {
+export function diffReports(base: ReconReport, compare: ReconReport): ScanDiff | { error: string } {
+  if (base.domain !== compare.domain) {
+    return { error: `Cannot diff scans from different domains (${base.domain} vs ${compare.domain})` };
+  }
   const baseHosts = new Set(base.subdomains.map((s) => s.host));
   const compareHosts = new Set(compare.subdomains.map((s) => s.host));
 

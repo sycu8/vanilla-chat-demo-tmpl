@@ -3,6 +3,7 @@
  */
 
 import type { ReconEnv } from "../lib/env";
+import { deserializeScope } from "../lib/scope";
 import { saveScan } from "../lib/storage";
 import { buildReportFromRequest } from "../services/simulation";
 import type { ScanRequest } from "../lib/types";
@@ -15,7 +16,7 @@ export async function scheduledScan(
   if (!env.DB) return;
 
   const { results } = await env.DB.prepare(
-    "SELECT id, target, domain, depth, simulation, keywords FROM scheduled_targets WHERE enabled = 1 LIMIT 5"
+    "SELECT id, target, domain, depth, simulation, keywords, scope_include, scope_exclude FROM scheduled_targets WHERE enabled = 1 LIMIT 5"
   ).all<{
     id: string;
     target: string;
@@ -23,6 +24,8 @@ export async function scheduledScan(
     depth: string;
     simulation: number;
     keywords: string;
+    scope_include: string;
+    scope_exclude: string;
   }>();
 
   for (const row of results || []) {
@@ -31,6 +34,7 @@ export async function scheduledScan(
       keywords: row.keywords ? row.keywords.split(",").map((k) => k.trim()).filter(Boolean) : [],
       depth: row.depth === "deep" ? "deep" : "quick",
       simulation: row.simulation !== 0,
+      scope: deserializeScope(row.scope_include || "", row.scope_exclude || ""),
     };
 
     try {

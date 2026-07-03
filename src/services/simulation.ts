@@ -9,13 +9,14 @@
  */
 
 import { createRng, domainSeed, extractDomain } from "../lib/domain";
-import { filterHostsInScope } from "../lib/scope";
+import { mergeSecurityFindings } from "../lib/findings";
+import { filterHostsInScope, isHostInScope } from "../lib/scope";
 import type { ReconEnv } from "../lib/env";
 import { matchVulnerabilities } from "../lib/cve";
 import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
 import { enumerateDnsRecords, dnsRecordsToOsint } from "./dns-intel";
-import { scanExposure, scanExposureStream } from "./exposure";
+import { scanExposure } from "./exposure";
 import { enumerateSubdomains, enumerateSubdomainsStream, getApexDomain } from "./subdomain";
 import { fingerprintHosts, fingerprintHostsStream, formatFingerprint } from "./fingerprint";
 import { gatherLiveOsint } from "./osint-live";
@@ -248,11 +249,7 @@ async function resolveSecurityFindings(
   const fromTemplates = await runTemplateProbes(fingerprints, depth);
   const fromTakeover = await detectTakeoverCandidates(hosts);
   const fromDirs = await bruteDirectories(hosts, depth);
-  const merged = new Map<string, SecurityFinding>();
-  for (const f of [...fromExposure, ...fromTemplates, ...fromTakeover, ...fromDirs]) {
-    merged.set(f.id, f);
-  }
-  return [...merged.values()];
+  return mergeSecurityFindings(fromExposure, fromTemplates, fromTakeover, fromDirs);
 }
 
 /** Async generator that yields scan events phase-by-phase */
@@ -344,6 +341,9 @@ export async function* runReconScan(
     }
 
     if (event.kind === "verified") {
+      if (request.scope && !isHostInScope(event.entry.host, apex, request.scope)) {
+        continue;
+      }
       subdomains.push(event.entry);
       const sub = event.entry;
       yield { type: "subdomain", data: sub };
@@ -449,40 +449,23 @@ export async function* runReconScan(
     };
   }
 
-  yield { type: "log", data: log(4, "info", "[LIVE] Nuclei-style templates + takeover + directory probes...") };
+  yield { type: "log", data: log(4, "info", "[LIVE] Exposure checks, templates, takeover, and directory probes...") };
 
-  const securityFindings: SecurityFinding[] = [];
-  for await (const event of scanExposureStream(fingerprints, dnsRecords, apex, request.depth)) {
-    if (event.kind === "status") {
-      yield {
-        type: "phase",
-        data: { phase: 4, name: PHASES[3].name, status: "running", progress: 72, detail: event.message },
-      };
-      yield { type: "log", data: log(4, "info", event.message) };
-      continue;
-    }
-    securityFindings.push(event.entry);
+  yield {
+    type: "phase",
+    data: { phase: 4, name: PHASES[3].name, status: "running", progress: 72, detail: "Running exposure and misconfiguration checks..." },
+  };
+
+  const securityFindings = await resolveSecurityFindings(fingerprints, dnsRecords, apex, request.depth);
+  for (const entry of securityFindings) {
     yield {
       type: "log",
       data: log(
         4,
-        event.entry.severity === "high" ? "error" : event.entry.severity === "medium" ? "warn" : "info",
-        `[${event.entry.category.toUpperCase()}] ${event.entry.host}: ${event.entry.title}`
+        entry.severity === "high" ? "error" : entry.severity === "medium" ? "warn" : "info",
+        `[${entry.category.toUpperCase()}] ${entry.host}: ${entry.title}`
       ),
     };
-  }
-
-  for (const extra of await runTemplateProbes(fingerprints, request.depth)) {
-    if (!securityFindings.some((f) => f.id === extra.id)) securityFindings.push(extra);
-    yield { type: "log", data: log(4, "warn", `[TEMPLATE] ${extra.host}: ${extra.title}`) };
-  }
-  for (const extra of await detectTakeoverCandidates(fingerprints.map((f) => f.host))) {
-    if (!securityFindings.some((f) => f.id === extra.id)) securityFindings.push(extra);
-    yield { type: "log", data: log(4, extra.severity === "high" ? "error" : "warn", `[TAKEOVER] ${extra.host}: ${extra.title}`) };
-  }
-  for (const extra of await bruteDirectories(fingerprints.map((f) => f.host), request.depth)) {
-    if (!securityFindings.some((f) => f.id === extra.id)) securityFindings.push(extra);
-    yield { type: "log", data: log(4, "info", `[DIR] ${extra.host}: ${extra.title}`) };
   }
 
   yield {

@@ -7,7 +7,7 @@ import { streamSSE } from "hono/streaming";
 import { extractDomain, isValidDomain } from "../lib/domain";
 import { requireAuth } from "../lib/auth";
 import { checkRateLimit, clientRateKey } from "../lib/rate-limit";
-import { validateScopeTarget } from "../lib/scope";
+import { validateScopeTarget, serializeScope, deserializeScope } from "../lib/scope";
 import { diffReports } from "../lib/diff";
 import { exportJson, exportSarif } from "../lib/export";
 import { regenerateMindmap } from "../lib/mindmap";
@@ -67,12 +67,6 @@ function parseScanRequest(body: unknown): ScanRequest | { error: string } {
   return { target, keywords, depth, simulation, scope };
 }
 
-recon.use("*", async (c, next) => {
-  const authResp = requireAuth(c.req.raw, c.env);
-  if (authResp) return authResp;
-  await next();
-});
-
 recon.get("/health", (c) => {
   return c.json({
     status: "operational",
@@ -81,6 +75,12 @@ recon.get("/health", (c) => {
     features: ["live-recon", "d1-history", "kv-cache", "nvd", "templates", "sarif"],
     timestamp: new Date().toISOString(),
   });
+});
+
+recon.use("*", async (c, next) => {
+  const authResp = requireAuth(c.req.raw, c.env);
+  if (authResp) return authResp;
+  await next();
 });
 
 recon.post("/scan", async (c) => {
@@ -123,6 +123,9 @@ recon.post("/mindmap", async (c) => {
   if (raw.report && typeof raw.report === "object") {
     return c.json({ mindmap: regenerateMindmap(raw.report as ReconReport, variant) });
   }
+
+  const rate = await checkRateLimit(c.env, clientRateKey(c.req.raw));
+  if (!rate.allowed) return c.json({ error: "Rate limit exceeded", remaining: 0 }, 429);
 
   const parsed = parseScanRequest(body);
   if ("error" in parsed) return c.json({ error: parsed.error }, 400);
@@ -175,7 +178,8 @@ recon.post("/report", async (c) => {
 
 recon.get("/history", async (c) => {
   const domain = c.req.query("domain");
-  const limit = Number(c.req.query("limit") || "25");
+  const rawLimit = Number(c.req.query("limit") || "25");
+  const limit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 25));
   const scans = await listScans(c.env, domain || undefined, limit);
   return c.json({ scans });
 });
@@ -202,7 +206,10 @@ recon.post("/diff", async (c) => {
   const [base, compare] = await Promise.all([getScan(c.env, baseId), getScan(c.env, compareId)]);
   if (!base || !compare) return c.json({ error: "One or both scans not found" }, 404);
 
-  return c.json({ diff: diffReports(base, compare) });
+  const diff = diffReports(base, compare);
+  if ("error" in diff) return c.json({ error: diff.error }, 400);
+
+  return c.json({ diff });
 });
 
 recon.get("/export/:id", async (c) => {
@@ -243,11 +250,22 @@ recon.post("/schedule", async (c) => {
 
   const id = `sched-${Date.now().toString(36)}`;
   const domain = extractDomain(parsed.target);
+  const scopeFields = serializeScope(parsed.scope);
   await c.env.DB.prepare(
-    `INSERT INTO scheduled_targets (id, target, domain, depth, simulation, keywords, enabled, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`
+    `INSERT INTO scheduled_targets (id, target, domain, depth, simulation, keywords, scope_include, scope_exclude, enabled, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
   )
-    .bind(id, parsed.target, domain, parsed.depth, parsed.simulation ? 1 : 0, parsed.keywords.join(","), new Date().toISOString())
+    .bind(
+      id,
+      parsed.target,
+      domain,
+      parsed.depth,
+      parsed.simulation ? 1 : 0,
+      parsed.keywords.join(","),
+      scopeFields.include,
+      scopeFields.exclude,
+      new Date().toISOString()
+    )
     .run();
 
   return c.json({ id, message: "Target scheduled for daily scan at 06:00 UTC" });
