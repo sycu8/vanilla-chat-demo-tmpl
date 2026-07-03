@@ -8,6 +8,7 @@ import type { ScanDepth, SubdomainEntry } from "../lib/types";
 const CRT_SH_URL = "https://crt.sh/";
 const HACKERTARGET_URL = "https://api.hackertarget.com/hostsearch/";
 const CERTSPOTTER_URL = "https://api.certspotter.com/v1/issuances";
+const WAYBACK_CDX_URL = "https://web.archive.org/cdx/search/cdx";
 const DNS_PROVIDERS = [
   "https://cloudflare-dns.com/dns-query",
   "https://dns.google/resolve",
@@ -18,6 +19,7 @@ const TIMEOUTS = {
   crtSh: 45_000,
   certSpotter: 25_000,
   hackerTarget: 35_000,
+  wayback: 20_000,
   dns: 12_000,
   http: 15_000,
 };
@@ -389,6 +391,58 @@ async function fetchHackerTargetHosts(domain: string): Promise<Set<string>> {
   }
 }
 
+function parseWaybackHosts(rows: unknown, domain: string): Set<string> {
+  const hosts = new Set<string>();
+  if (!Array.isArray(rows)) return hosts;
+
+  for (const row of rows.slice(1)) {
+    const url = Array.isArray(row) ? row[0] : row;
+    if (typeof url !== "string") continue;
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      const normalized = normalizeHost(host, domain);
+      if (normalized) hosts.add(normalized);
+    } catch {
+      // skip malformed archive URLs
+    }
+  }
+  return hosts;
+}
+
+async function fetchWaybackHosts(domain: string, limit: number): Promise<Set<string>> {
+  const url =
+    `${WAYBACK_CDX_URL}?url=${encodeURIComponent(`*.${domain}/*`)}` +
+    `&output=json&fl=original&collapse=urlkey&limit=${limit}`;
+  const data = await fetchJsonWithTimeout(url, TIMEOUTS.wayback);
+  return parseWaybackHosts(data, domain);
+}
+
+/** Subfinder-style permutations from discovered labels (api-dev, dev-api, etc.) */
+function buildPermutationHosts(passive: Set<string>, apex: string, limit: number): Set<string> {
+  const hosts = new Set<string>();
+  const labels = new Set<string>();
+  const prefixes = ["dev", "staging", "uat", "test", "beta", "old", "new", "v2", "internal"];
+
+  for (const host of passive) {
+    if (host === apex) continue;
+    const sub = host.endsWith(`.${apex}`) ? host.slice(0, -(apex.length + 1)) : "";
+    const base = sub.includes(".") ? sub.split(".")[0] : sub;
+    if (base && base.length >= 2 && base.length <= 20) labels.add(base);
+  }
+
+  for (const label of labels) {
+    for (const prefix of prefixes) {
+      if (hosts.size >= limit) return hosts;
+      const combined = normalizeHost(`${prefix}-${label}.${apex}`, apex);
+      if (combined) hosts.add(combined);
+      const reversed = normalizeHost(`${label}-${prefix}.${apex}`, apex);
+      if (reversed) hosts.add(reversed);
+    }
+  }
+
+  return hosts;
+}
+
 function buildBruteForceHosts(apex: string, labelLimit: number): Set<string> {
   const hosts = new Set<string>();
   for (const label of BRUTE_FORCE_LABELS.slice(0, labelLimit)) {
@@ -519,19 +573,21 @@ export async function* enumerateSubdomainsStream(
   const candidates = new Set<string>([domain, apex, `www.${apex}`]);
   const passiveHosts = new Set<string>();
 
-  const sourceParts = ["crt.sh", "crt.sh wildcard", "certspotter", "passive DNS"];
-  if (scanApex) sourceParts.push("DNS wordlist");
+  const sourceParts = ["crt.sh", "crt.sh wildcard", "certspotter", "passive DNS", "wayback"];
+  if (scanApex) sourceParts.push("DNS wordlist", "permutations");
 
   yield {
     kind: "status",
     message: `Querying ${sourceParts.join(" + ")} for ${apex}${scanApex ? " (root domain — expanded discovery)" : ""}...`,
   };
 
-  const [crtHosts, crtWildcardHosts, certSpotterHosts, htHosts] = await Promise.all([
+  const waybackLimit = options.depth === "deep" ? 300 : 150;
+  const [crtHosts, crtWildcardHosts, certSpotterHosts, htHosts, waybackHosts] = await Promise.all([
     fetchCrtShHosts(apex),
     fetchCrtShHosts(apex, true),
     fetchCertSpotterHosts(apex),
     fetchHackerTargetHosts(apex),
+    fetchWaybackHosts(apex, waybackLimit),
   ]);
 
   for (const host of crtHosts) {
@@ -550,20 +606,30 @@ export async function* enumerateSubdomainsStream(
     candidates.add(host);
     passiveHosts.add(host);
   }
+  for (const host of waybackHosts) {
+    candidates.add(host);
+    passiveHosts.add(host);
+  }
 
   let bruteCount = 0;
+  let permCount = 0;
   if (scanApex) {
     const bruteHosts = buildBruteForceHosts(apex, rootBonus.bruteLabels);
     bruteCount = bruteHosts.size;
     for (const host of bruteHosts) candidates.add(host);
+
+    const permLimit = options.depth === "deep" ? 80 : 40;
+    const permHosts = buildPermutationHosts(passiveHosts, apex, permLimit);
+    permCount = permHosts.size;
+    for (const host of permHosts) candidates.add(host);
   }
 
   yield {
     kind: "status",
     message:
       `Sources: crt.sh=${crtHosts.size}, wildcard=${crtWildcardHosts.size}, ` +
-      `certspotter=${certSpotterHosts.size}, passive DNS=${htHosts.size}` +
-      (scanApex ? `, wordlist=${bruteCount}` : "") +
+      `certspotter=${certSpotterHosts.size}, passive DNS=${htHosts.size}, wayback=${waybackHosts.size}` +
+      (scanApex ? `, wordlist=${bruteCount}, permutations=${permCount}` : "") +
       ` → ${candidates.size} unique candidates`,
   };
 

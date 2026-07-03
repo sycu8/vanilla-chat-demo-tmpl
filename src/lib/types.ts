@@ -29,6 +29,15 @@ export interface SubdomainEntry {
   services: string[];
   ip: string;
   status: number;
+  /** Page title from HTTP probe (httpx-style) */
+  title?: string;
+}
+
+export interface DnsRecord {
+  type: string;
+  name: string;
+  value: string;
+  risk: RiskLevel;
 }
 
 export interface TechFingerprint {
@@ -38,6 +47,23 @@ export interface TechFingerprint {
   cms?: string;
   version?: string;
   headers: string[];
+  /** httpx-style metadata */
+  title?: string;
+  contentLength?: number;
+  finalUrl?: string;
+  /** Security header score 0–100 (higher = better) */
+  securityScore?: number;
+  missingHeaders?: string[];
+}
+
+export interface SecurityFinding {
+  id: string;
+  host: string;
+  category: "headers" | "exposure" | "dns" | "misconfig";
+  severity: RiskLevel;
+  title: string;
+  description: string;
+  remediation: string;
 }
 
 export interface Vulnerability {
@@ -71,9 +97,11 @@ export interface ReconReport {
   riskLevel: RiskLevel;
   summary: string;
   osint: OsintFinding[];
+  dnsRecords: DnsRecord[];
   subdomains: SubdomainEntry[];
   fingerprints: TechFingerprint[];
   vulnerabilities: Vulnerability[];
+  securityFindings: SecurityFinding[];
   synthesis: SynthesisInsight[];
   mindmap: string;
   markdown: string;

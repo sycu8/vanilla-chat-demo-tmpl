@@ -93,6 +93,10 @@ async function testReport() {
   if (!report.markdown.includes("Remediation:")) return fail("cve", "markdown missing remediation section");
   if (!report.markdown.includes("Vulnerable Subdomains")) return fail("cve", "markdown missing vulnerable subdomain mapping");
 
+  if (!report.dnsRecords?.length) return fail("dns", "no live DNS records");
+  if (!report.securityFindings?.length) return fail("exposure", "no security/exposure findings");
+  if (!report.markdown.includes("Exposure & Misconfiguration")) return fail("exposure", "markdown missing exposure section");
+
   const blogVulns = report.vulnerabilities.filter((v) => v.host === "blog.orangecloud.vn");
   const kbVulns = report.vulnerabilities.filter((v) => v.host === "kb.orangecloud.vn");
   const nextHosts = new Set([...blogVulns, ...kbVulns].map((v) => v.host));
@@ -102,6 +106,7 @@ async function testReport() {
   }
 
   ok(`CVE remediations (${report.vulnerabilities.length} findings on ${new Set(report.vulnerabilities.map((v) => v.host)).size} hosts)`);
+  ok(`DNS intel (${report.dnsRecords.length} records) + exposure (${report.securityFindings.length} findings)`);
 
   return report;
 }

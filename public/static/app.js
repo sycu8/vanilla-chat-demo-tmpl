@@ -251,7 +251,7 @@ function resetSubdomainList() {
   if (subdomainList) {
     subdomainList.innerHTML = `
       <tr id="subdomain-empty-row">
-        <td colspan="5" class="p-4 text-center text-forge-muted">Subdomains will appear during Phase 2...</td>
+        <td colspan="6" class="p-4 text-center text-forge-muted">Subdomains will appear during Phase 2...</td>
       </tr>`;
   }
 }
@@ -287,16 +287,25 @@ function formatHostCves(host, vulnMap) {
     .join(", ");
 }
 
-function redrawSubdomainTable(vulnMap = buildVulnMap(currentReport?.vulnerabilities)) {
+function buildTitleMap(fingerprints) {
+  const map = new Map();
+  for (const fp of fingerprints || []) {
+    if (fp.title) map.set(fp.host, fp.title);
+  }
+  return map;
+}
+
+function redrawSubdomainTable(vulnMap = buildVulnMap(currentReport?.vulnerabilities), titleMap = buildTitleMap(currentReport?.fingerprints)) {
   if (!subdomainList) return;
   subdomainList.innerHTML = liveSubdomains
     .map(
       (s) => `
     <tr class="border-t border-forge-border/50 hover:bg-forge-surface/50">
       <td class="p-2 text-forge-accent2">${escapeHtml(s.host)}</td>
+      <td class="p-2 text-forge-muted hidden sm:table-cell truncate max-w-[140px]" title="${escapeHtml(titleMap.get(s.host) || s.title || "")}">${escapeHtml((titleMap.get(s.host) || s.title || "—").slice(0, 40))}</td>
       <td class="p-2 text-forge-muted">${escapeHtml(s.ip)}</td>
       <td class="p-2 ${statusClass(s.status)}">${s.status || "DNS"}</td>
-      <td class="p-2 text-forge-muted">${escapeHtml((s.services || []).join(", "))}</td>
+      <td class="p-2 text-forge-muted hidden md:table-cell">${escapeHtml((s.services || []).join(", "))}</td>
       <td class="p-2 text-xs">${formatHostCves(s.host, vulnMap)}</td>
     </tr>`
     )
@@ -320,17 +329,17 @@ function appendSubdomainRow(entry) {
   }
 }
 
-function renderSubdomainTable(subdomains, vulnerabilities) {
+function renderSubdomainTable(subdomains, vulnerabilities, fingerprints) {
   if (!subdomains?.length) {
     resetSubdomainList();
     if (subdomainList) {
       subdomainList.innerHTML = `
-        <tr><td colspan="5" class="p-4 text-center text-forge-warn">No live subdomains found — try Deep Scan or check target DNS.</td></tr>`;
+        <tr><td colspan="6" class="p-4 text-center text-forge-warn">No live subdomains found — try Deep Scan or check target DNS.</td></tr>`;
     }
     return;
   }
   liveSubdomains = [...subdomains].sort((a, b) => a.host.localeCompare(b.host));
-  redrawSubdomainTable(buildVulnMap(vulnerabilities));
+  redrawSubdomainTable(buildVulnMap(vulnerabilities), buildTitleMap(fingerprints));
   if (subdomainCount) {
     subdomainCount.textContent = `${liveSubdomains.length} host${liveSubdomains.length === 1 ? "" : "s"}`;
   }
@@ -561,7 +570,7 @@ async function onScanComplete(slimReport) {
   }
 
   sectionMindmap.classList.remove("hidden");
-  renderSubdomainTable(currentReport.subdomains || liveSubdomains, currentReport.vulnerabilities);
+  renderSubdomainTable(currentReport.subdomains || liveSubdomains, currentReport.vulnerabilities, currentReport.fingerprints);
   await renderMindmap(currentReport.mindmap);
 
   sectionReport.classList.remove("hidden");
@@ -680,6 +689,8 @@ $("#btn-export-png").addEventListener("click", async () => {
 function renderDashboard(report) {
   const highVulns = report.vulnerabilities.filter((v) => v.severity === "high").length;
   const medVulns = report.vulnerabilities.filter((v) => v.severity === "medium").length;
+  const highExposure = (report.securityFindings || []).filter((f) => f.severity === "high").length;
+  const medExposure = (report.securityFindings || []).filter((f) => f.severity === "medium").length;
   const scoreColor =
     report.riskLevel === "high" ? "text-forge-danger" :
     report.riskLevel === "medium" ? "text-forge-warn" : "text-forge-safe";
@@ -701,9 +712,14 @@ function renderDashboard(report) {
       <div class="text-xs text-forge-muted mt-1">${medVulns} medium</div>
     </div>
     <div class="forge-card text-center">
-      <div class="text-xs text-forge-muted uppercase tracking-wider mb-1">OSINT Findings</div>
+      <div class="text-xs text-forge-muted uppercase tracking-wider mb-1">Exposure</div>
+      <div class="text-4xl font-extrabold text-forge-warn">${(report.securityFindings || []).length}</div>
+      <div class="text-xs text-forge-muted mt-1">${highExposure} high · ${medExposure} medium</div>
+    </div>
+    <div class="forge-card text-center">
+      <div class="text-xs text-forge-muted uppercase tracking-wider mb-1">OSINT / DNS</div>
       <div class="text-4xl font-extrabold text-forge-accent">${report.osint.length}</div>
-      <div class="text-xs text-forge-muted mt-1">intel items</div>
+      <div class="text-xs text-forge-muted mt-1">${(report.dnsRecords || []).length} DNS records</div>
     </div>`;
 }
 

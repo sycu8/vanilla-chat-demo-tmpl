@@ -12,6 +12,8 @@ import { createRng, domainSeed, extractDomain } from "../lib/domain";
 import { matchVulnerabilities } from "../lib/cve";
 import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
+import { enumerateDnsRecords, dnsRecordsToOsint } from "./dns-intel";
+import { scanExposure, scanExposureStream } from "./exposure";
 import { enumerateSubdomains, enumerateSubdomainsStream } from "./subdomain";
 import { fingerprintHosts, fingerprintHostsStream, formatFingerprint } from "./fingerprint";
 import type {
@@ -25,6 +27,8 @@ import type {
   TechFingerprint,
   Vulnerability,
   PhaseEvent,
+  DnsRecord,
+  SecurityFinding,
 } from "../lib/types";
 
 const PHASES = [
@@ -114,12 +118,21 @@ function generateOsint(
   return findings;
 }
 
-function calculateRiskScore(vulns: Vulnerability[], subdomains: SubdomainEntry[]): number {
+function calculateRiskScore(
+  vulns: Vulnerability[],
+  subdomains: SubdomainEntry[],
+  securityFindings: SecurityFinding[] = []
+): number {
   let score = 0;
   for (const v of vulns) {
     if (v.severity === "high") score += 15;
     else if (v.severity === "medium") score += 8;
     else score += 3;
+  }
+  for (const f of securityFindings) {
+    if (f.severity === "high") score += 12;
+    else if (f.severity === "medium") score += 6;
+    else score += 2;
   }
   const exposed = subdomains.filter((s) => s.status === 200 && !s.host.startsWith("www.")).length;
   score += Math.min(exposed * 2, 20);
@@ -131,10 +144,12 @@ function generateSynthesis(
   osint: OsintFinding[],
   subdomains: SubdomainEntry[],
   vulns: Vulnerability[],
+  securityFindings: SecurityFinding[],
   riskScore: number,
   rng: ReturnType<typeof createRng>
 ): SynthesisInsight[] {
   const highVulns = vulns.filter((v) => v.severity === "high").length;
+  const highExposure = securityFindings.filter((f) => f.severity === "high").length;
   const adminPanels = subdomains.filter((s) =>
     s.host.includes("admin") || s.host.includes("jenkins") || s.host.includes("grafana")
   );
@@ -157,14 +172,19 @@ function generateSynthesis(
       priority: highVulns > 2 ? "high" : "medium",
     },
     {
+      title: "Exposure & Misconfiguration",
+      detail: `${securityFindings.length} exposure findings (${highExposure} high) from security headers, DNS posture, and sensitive path probes — Nuclei-style checks.`,
+      priority: highExposure > 0 ? "high" : securityFindings.length > 5 ? "medium" : "info",
+    },
+    {
       title: "Recommended Next Steps",
-      detail: `1) Validate ${adminPanels.length} admin endpoints behind MFA\n2) Patch ${highVulns} critical CVEs\n3) Conduct phishing simulation using identified lures\n4) Review subdomain sprawl (${subdomains.length} hosts)`,
+      detail: `1) Validate ${adminPanels.length} admin endpoints behind MFA\n2) Patch ${highVulns} critical CVEs\n3) Fix ${highExposure} high-severity exposure issues\n4) Review subdomain sprawl (${subdomains.length} hosts)`,
       priority: riskScore > 60 ? "high" : "medium",
     },
     {
       title: "Compliance Note",
       detail: rng.next() > 0.5
-        ? "Simulation mode — findings are synthetic. Enable live integrations for production assessments."
+        ? "Simulation mode — social-engineering lures are synthetic. Subdomain, fingerprint, DNS, and exposure checks are live."
         : "External scan may trigger IDS/IPS alerts. Ensure proper authorization before live reconnaissance.",
       priority: "info",
     },
@@ -194,15 +214,30 @@ export async function* runReconScan(
     type: "phase",
     data: { phase: 1, name: PHASES[0].name, status: "running", progress: 0, detail: "Collecting OSINT..." },
   };
-  yield { type: "log", data: log(1, "info", `[SIM] Initializing OSINT collectors for ${domain}...`) };
-  await delay(400);
-  yield { type: "log", data: log(1, "info", "Querying public records and social graph...") };
-  await delay(350);
-  yield { type: "log", data: log(1, "info", `Analyzing keywords: ${request.keywords.join(", ") || "(none)"}`) };
-  await delay(300);
+  yield { type: "log", data: log(1, "info", `[LIVE] Querying DNS records (MX, TXT, SPF, DMARC, NS)...`) };
+  const dnsRecords: DnsRecord[] = await enumerateDnsRecords(domain);
+  const liveOsint = dnsRecordsToOsint(dnsRecords);
+  for (const finding of liveOsint) {
+    yield {
+      type: "log",
+      data: log(1, finding.risk === "high" ? "warn" : "success", `[LIVE ${finding.category}] ${finding.detail}`),
+    };
+    await delay(150);
+  }
 
-  const osint = generateOsint(domain, request.keywords, rng);
-  for (const finding of osint) {
+  if (!request.simulation) {
+    yield { type: "log", data: log(1, "info", "Querying public records and social graph...") };
+    await delay(350);
+  } else {
+    yield { type: "log", data: log(1, "info", "[SIM] Generating social-engineering intelligence...") };
+    await delay(300);
+  }
+  yield { type: "log", data: log(1, "info", `Analyzing keywords: ${request.keywords.join(", ") || "(none)"}`) };
+  await delay(200);
+
+  const simOsint = request.simulation ? generateOsint(domain, request.keywords, rng) : [];
+  const osint: OsintFinding[] = [...liveOsint, ...simOsint];
+  for (const finding of simOsint) {
     yield {
       type: "log",
       data: log(1, finding.risk === "high" ? "warn" : "success", `[${finding.category}] ${finding.detail}`),
@@ -334,7 +369,7 @@ export async function* runReconScan(
     data: { phase: 4, name: PHASES[3].name, status: "running", progress: 60, detail: "Matching CVE databases..." },
   };
   yield { type: "log", data: log(4, "info", "Cross-referencing tech stack against CVE databases (NVD, OSV)...") };
-  await delay(450);
+  await delay(300);
 
   const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, domain);
   for (const vuln of vulnerabilities) {
@@ -350,7 +385,31 @@ export async function* runReconScan(
       type: "log",
       data: log(4, "success", `  ↳ Remediation: ${vuln.remediation}`),
     };
-    await delay(200);
+    await delay(150);
+  }
+
+  yield { type: "log", data: log(4, "info", "[LIVE] Running Nuclei-style exposure checks (headers, DNS, sensitive paths)...") };
+
+  const securityFindings: SecurityFinding[] = [];
+  for await (const event of scanExposureStream(fingerprints, dnsRecords, domain, request.depth)) {
+    if (event.kind === "status") {
+      yield {
+        type: "phase",
+        data: { phase: 4, name: PHASES[3].name, status: "running", progress: 72, detail: event.message },
+      };
+      yield { type: "log", data: log(4, "info", event.message) };
+      continue;
+    }
+    securityFindings.push(event.entry);
+    yield {
+      type: "log",
+      data: log(
+        4,
+        event.entry.severity === "high" ? "error" : event.entry.severity === "medium" ? "warn" : "info",
+        `[${event.entry.category.toUpperCase()}] ${event.entry.host}: ${event.entry.title}`
+      ),
+    };
+    await delay(100);
   }
 
   yield {
@@ -364,11 +423,11 @@ export async function* runReconScan(
     data: { phase: 5, name: PHASES[4].name, status: "running", progress: 80, detail: "Computing risk score..." },
   };
   yield { type: "log", data: log(5, "info", "Synthesizing intelligence and computing risk score...") };
-  await delay(500);
+  await delay(400);
 
-  const riskScore = calculateRiskScore(vulnerabilities, subdomains);
+  const riskScore = calculateRiskScore(vulnerabilities, subdomains, securityFindings);
   const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "info";
-  const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, riskScore, rng);
+  const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, securityFindings, riskScore, rng);
 
   for (const insight of synthesis) {
     yield {
@@ -379,7 +438,9 @@ export async function* runReconScan(
   }
 
   const completedAt = now();
-  const summary = `Reconnaissance of ${domain} identified ${subdomains.length} live hosts (DNS-verified), ${vulnerabilities.filter((v) => v.severity === "high").length} critical vulnerabilities, and a composite risk score of ${riskScore}/100. ${request.simulation ? "OSINT/CVE phases use simulation data." : "Live scan complete."}`;
+  const highVulns = vulnerabilities.filter((v) => v.severity === "high").length;
+  const highExposure = securityFindings.filter((f) => f.severity === "high").length;
+  const summary = `Reconnaissance of ${domain} identified ${subdomains.length} live hosts, ${highVulns} critical CVEs on ${new Set(vulnerabilities.map((v) => v.host)).size} hosts, ${securityFindings.length} exposure findings (${highExposure} high), and a composite risk score of ${riskScore}/100.`;
 
   let report: ReconReport = {
     id: scanId,
@@ -394,9 +455,11 @@ export async function* runReconScan(
     riskLevel,
     summary,
     osint,
+    dnsRecords,
     subdomains,
     fingerprints,
     vulnerabilities,
+    securityFindings,
     synthesis,
     mindmap: "",
     markdown: "",
@@ -422,16 +485,20 @@ export async function* runReconScan(
 export async function buildReportFromRequest(request: ScanRequest): Promise<ReconReport> {
   const domain = extractDomain(request.target);
   const rng = createRng(domainSeed(domain));
-  const osint = generateOsint(domain, request.keywords, rng);
+  const dnsRecords = await enumerateDnsRecords(domain);
+  const liveOsint = dnsRecordsToOsint(dnsRecords);
+  const simOsint = request.simulation ? generateOsint(domain, request.keywords, rng) : [];
+  const osint = [...liveOsint, ...simOsint];
   const subdomains = await enumerateSubdomains(domain, { depth: request.depth });
   const fingerprints = await fingerprintHosts(
     subdomains.map((s) => s.host),
     request.depth
   );
   const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, domain);
-  const riskScore = calculateRiskScore(vulnerabilities, subdomains);
+  const securityFindings = await scanExposure(fingerprints, dnsRecords, domain, request.depth);
+  const riskScore = calculateRiskScore(vulnerabilities, subdomains, securityFindings);
   const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "info";
-  const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, riskScore, rng);
+  const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, securityFindings, riskScore, rng);
 
   let report: ReconReport = {
     id: `rf-${domainSeed(domain).toString(36)}`,
@@ -444,11 +511,13 @@ export async function buildReportFromRequest(request: ScanRequest): Promise<Reco
     completedAt: now(),
     riskScore,
     riskLevel,
-    summary: `Assessment of ${domain}`,
+    summary: `Reconnaissance of ${domain} — ${subdomains.length} hosts, ${vulnerabilities.length} CVE matches, ${securityFindings.length} exposure findings`,
     osint,
+    dnsRecords,
     subdomains,
     fingerprints,
     vulnerabilities,
+    securityFindings,
     synthesis,
     mindmap: "",
     markdown: "",

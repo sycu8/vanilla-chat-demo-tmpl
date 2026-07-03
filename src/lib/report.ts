@@ -50,6 +50,15 @@ export function generateMarkdown(report: ReconReport): string {
     lines.push(`- **${f.category}** [${f.risk}]: ${f.detail}`);
   }
 
+  if (report.dnsRecords?.length) {
+    lines.push(``, `### DNS Records (Live)`, ``);
+    lines.push(`| Type | Name | Value | Risk |`);
+    lines.push(`|------|------|-------|------|`);
+    for (const r of report.dnsRecords) {
+      lines.push(`| ${r.type} | ${r.name} | ${r.value.slice(0, 80)} | ${r.risk} |`);
+    }
+  }
+
   lines.push(``, `## Phase 2: Subdomain Enumeration`, ``);
   lines.push(`| Subdomain | Services | IP | Status |`);
   lines.push(`|-----------|----------|-----|--------|`);
@@ -66,6 +75,9 @@ export function generateMarkdown(report: ReconReport): string {
       .join(" / ");
     lines.push(`### ${fp.host}`);
     lines.push(`- **Stack:** ${tech || "Unknown"}`);
+    if (fp.title) lines.push(`- **Title:** ${fp.title}`);
+    if (fp.securityScore !== undefined) lines.push(`- **Security Header Score:** ${fp.securityScore}/100`);
+    if (fp.missingHeaders?.length) lines.push(`- **Missing Headers:** ${fp.missingHeaders.join(", ")}`);
     lines.push(`- **Headers:** ${fp.headers.join(", ")}`);
     lines.push(``);
   }
@@ -90,6 +102,22 @@ export function generateMarkdown(report: ReconReport): string {
     lines.push(`- **Description:** ${v.description}`);
     lines.push(`- **Remediation:** ${v.remediation}`);
     lines.push(``);
+  }
+
+  if (report.securityFindings?.length) {
+    lines.push(`### Exposure & Misconfiguration (Nuclei-style)`, ``);
+    lines.push(`| Host | Category | Severity | Finding |`);
+    lines.push(`|------|----------|----------|---------|`);
+    for (const f of report.securityFindings) {
+      lines.push(`| ${f.host} | ${f.category} | ${f.severity.toUpperCase()} | ${f.title} |`);
+    }
+    lines.push(``);
+    for (const f of report.securityFindings.filter((x) => x.severity !== "info").slice(0, 15)) {
+      lines.push(`#### ${f.title} — ${f.host}`);
+      lines.push(`- **Description:** ${f.description}`);
+      lines.push(`- **Remediation:** ${f.remediation}`);
+      lines.push(``);
+    }
   }
 
   lines.push(``, `## Phase 5: Intelligence Synthesis`, ``);
@@ -142,6 +170,17 @@ export function generateHtml(report: ReconReport): string {
       (row) =>
         `<tr><td><code>${row.host}</code></td><td>${row.cves.map((c) => `<code>${c}</code>`).join(", ")}</td><td>${riskBadge(row.maxSeverity)}</td></tr>`
     )
+    .join("");
+
+  const exposureRows = (report.securityFindings || [])
+    .map(
+      (f) =>
+        `<tr><td><code>${f.host}</code></td><td>${f.category}</td><td>${riskBadge(f.severity)}</td><td>${f.title}</td><td class="remediation">${f.remediation}</td></tr>`
+    )
+    .join("");
+
+  const dnsRows = (report.dnsRecords || [])
+    .map((r) => `<tr><td>${r.type}</td><td><code>${r.name}</code></td><td>${r.value.slice(0, 100)}</td><td>${riskBadge(r.risk)}</td></tr>`)
     .join("");
 
   const synthesisBlocks = report.synthesis
@@ -208,6 +247,8 @@ export function generateHtml(report: ReconReport): string {
 
   <h2>Phase 1 — OSINT Fingerprints</h2>
   <table><thead><tr><th>Category</th><th>Detail</th><th>Risk</th></tr></thead><tbody>${osintRows}</tbody></table>
+  <h3>DNS Records</h3>
+  <table><thead><tr><th>Type</th><th>Name</th><th>Value</th><th>Risk</th></tr></thead><tbody>${dnsRows}</tbody></table>
 
   <h2>Phase 2 — Subdomain Enumeration</h2>
   <table><thead><tr><th>Subdomain</th><th>Services</th><th>IP</th><th>Status</th></tr></thead><tbody>${subdomainRows}</tbody></table>
@@ -227,6 +268,8 @@ export function generateHtml(report: ReconReport): string {
   <table><thead><tr><th>Host</th><th>CVEs</th><th>Max Severity</th></tr></thead><tbody>${vulnerableHostRows}</tbody></table>
   <h3>CVE Details</h3>
   <table><thead><tr><th>CVE</th><th>Severity</th><th>Host</th><th>Technology</th><th>CVSS</th><th>Description</th><th>Remediation</th></tr></thead><tbody>${vulnRows}</tbody></table>
+  <h3>Exposure & Misconfiguration</h3>
+  <table><thead><tr><th>Host</th><th>Category</th><th>Severity</th><th>Finding</th><th>Remediation</th></tr></thead><tbody>${exposureRows}</tbody></table>
 
   <h2>Phase 5 — Intelligence Synthesis</h2>
   ${synthesisBlocks}

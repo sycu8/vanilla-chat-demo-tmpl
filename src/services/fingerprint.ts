@@ -17,6 +17,31 @@ const SECURITY_HEADERS = [
   "cross-origin-resource-policy",
 ];
 
+function extractTitle(body: string): string | undefined {
+  const match = body.match(/<title[^>]*>([^<]{1,120})<\/title>/i);
+  return match?.[1]?.trim().replace(/\s+/g, " ");
+}
+
+function scoreSecurityHeaders(headers: Headers): { score: number; missing: string[] } {
+  let score = 0;
+  const missing: string[] = [];
+  const weights: Record<string, number> = {
+    "strict-transport-security": 25,
+    "content-security-policy": 25,
+    "x-frame-options": 20,
+    "x-content-type-options": 15,
+    "referrer-policy": 10,
+    "permissions-policy": 5,
+  };
+
+  for (const [name, weight] of Object.entries(weights)) {
+    if (headers.has(name)) score += weight;
+    else missing.push(name);
+  }
+
+  return { score, missing };
+}
+
 export type FingerprintStreamEvent =
   | { kind: "status"; message: string }
   | { kind: "progress"; current: number; total: number; host: string }
@@ -26,6 +51,7 @@ interface ProbeResult {
   status: number;
   headers: Headers;
   body: string;
+  finalUrl: string;
 }
 
 async function probeHost(host: string): Promise<ProbeResult | null> {
@@ -45,6 +71,7 @@ async function probeHost(host: string): Promise<ProbeResult | null> {
       status: res.status,
       headers: res.headers,
       body: body.slice(0, BODY_LIMIT),
+      finalUrl: res.url || url,
     };
   } catch {
     return null;
@@ -183,11 +210,13 @@ function detectFromHeaders(headers: Headers): {
 export function buildFingerprint(host: string, probe: ProbeResult): TechFingerprint {
   const fromHeaders = detectFromHeaders(probe.headers);
   const fromHtml = detectFromHtml(probe.body);
+  const { score, missing } = scoreSecurityHeaders(probe.headers);
 
   const framework = fromHtml.framework || fromHeaders.framework;
   const cms = fromHtml.cms || fromHeaders.cms;
   const server = [fromHeaders.server, fromHeaders.cdn].filter(Boolean).join(" / ") || undefined;
   const version = fromHtml.version;
+  const title = extractTitle(probe.body);
 
   const headers = [...new Set([...fromHeaders.notable, ...fromHtml.signals])].slice(0, 12);
 
@@ -198,6 +227,11 @@ export function buildFingerprint(host: string, probe: ProbeResult): TechFingerpr
     cms,
     version,
     headers,
+    title,
+    contentLength: probe.body.length,
+    finalUrl: probe.finalUrl !== `https://${host}` && probe.finalUrl !== `https://${host}/` ? probe.finalUrl : undefined,
+    securityScore: score,
+    missingHeaders: missing,
   };
 }
 
@@ -246,7 +280,10 @@ export async function fingerprintHosts(hosts: string[], depth: ScanDepth): Promi
 
 export function formatFingerprint(fp: TechFingerprint): string {
   const parts = [fp.server, fp.framework, fp.cms, fp.version].filter(Boolean);
-  if (parts.length) return parts.join(" | ");
+  const title = fp.title ? `"${fp.title.slice(0, 40)}"` : "";
+  const sec = fp.securityScore !== undefined ? `sec:${fp.securityScore}` : "";
+  const meta = [title, sec].filter(Boolean).join(" ");
+  if (parts.length) return meta ? `${parts.join(" | ")} (${meta})` : parts.join(" | ");
   if (fp.headers.length) return `headers: ${fp.headers.slice(0, 4).join(", ")}`;
   return "no signatures detected";
 }

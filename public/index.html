@@ -52,8 +52,8 @@
           Forge Your <span class="text-forge-accent">Attack Surface</span> Intelligence
         </h2>
         <p class="text-forge-muted text-lg">
-          Autonomous 5-phase reconnaissance pipeline with OSINT, subdomain enumeration,
-          tech fingerprinting, CVE matching, and interactive threat visualization.
+          Autonomous 5-phase reconnaissance pipeline with live DNS intel, subdomain enumeration,
+          httpx-style fingerprinting, CVE matching, Nuclei-style exposure checks, and threat visualization.
         </p>
       </div>
 
@@ -165,9 +165,10 @@
             <thead class="sticky top-0 bg-forge-surface text-forge-muted">
               <tr>
                 <th class="text-left p-2 font-semibold">Host</th>
+                <th class="text-left p-2 font-semibold hidden sm:table-cell">Title</th>
                 <th class="text-left p-2 font-semibold">IP</th>
                 <th class="text-left p-2 font-semibold">HTTP</th>
-                <th class="text-left p-2 font-semibold">Services</th>
+                <th class="text-left p-2 font-semibold hidden md:table-cell">Services</th>
                 <th class="text-left p-2 font-semibold">CVEs</th>
               </tr>
             </thead>
@@ -239,7 +240,7 @@
     <!-- ═══ SECTION: REPORT ═══ -->
     <section id="section-report" class="hidden space-y-6 mt-8">
       <!-- Risk Dashboard -->
-      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4" id="risk-dashboard">
+      <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4" id="risk-dashboard">
         <!-- Populated by JS -->
       </div>
 

@@ -69,6 +69,11 @@ export function buildMindmap(report: ReconReport): string {
     lines.push(`      ${mermaidLabel(label)}`);
   }
 
+  lines.push("    Exposure");
+  for (const f of (report.securityFindings || []).slice(0, 6)) {
+    lines.push(`      ${riskEmoji(f.severity)} ${mermaidLabel(`${f.title} @ ${f.host}`)}`);
+  }
+
   lines.push("    Vulnerabilities");
   for (const vuln of report.vulnerabilities.slice(0, 8)) {
     lines.push(
