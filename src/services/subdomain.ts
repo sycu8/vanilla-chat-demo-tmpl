@@ -7,7 +7,23 @@ import type { ScanDepth, SubdomainEntry } from "../lib/types";
 
 const CRT_SH_URL = "https://crt.sh/";
 const HACKERTARGET_URL = "https://api.hackertarget.com/hostsearch/";
-const DNS_QUERY_URL = "https://cloudflare-dns.com/dns-query";
+const DNS_PROVIDERS = [
+  "https://cloudflare-dns.com/dns-query",
+  "https://dns.google/resolve",
+];
+
+/** Tunable discovery timeouts (ms) — increased for slow CT/DNS targets */
+const TIMEOUTS = {
+  crtSh: 60_000,
+  hackerTarget: 35_000,
+  dns: 18_000,
+  http: 20_000,
+};
+
+const LIMITS = {
+  quick: { maxAlive: 50, maxCandidates: 120, concurrency: 8, httpProbe: true },
+  deep: { maxAlive: 100, maxCandidates: 200, concurrency: 10, httpProbe: true },
+};
 
 const SERVICE_HINTS: Record<string, string[]> = {
   api: ["REST API", "HTTPS"],
@@ -83,12 +99,12 @@ function parseHackerTargetHosts(text: string, domain: string): Set<string> {
 
 async function fetchCrtShHosts(domain: string): Promise<Set<string>> {
   const url = `${CRT_SH_URL}?q=${encodeURIComponent(domain)}&output=json`;
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "ReconForge/1.0" },
-    signal: AbortSignal.timeout(25_000),
-  });
-  if (!res.ok) return new Set();
   try {
+    const res = await fetch(url, {
+      headers: { Accept: "application/json", "User-Agent": "ReconForge/1.0" },
+      signal: AbortSignal.timeout(TIMEOUTS.crtSh),
+    });
+    if (!res.ok) return new Set();
     return parseCrtShHosts(await res.json(), domain);
   } catch {
     return new Set();
@@ -97,30 +113,36 @@ async function fetchCrtShHosts(domain: string): Promise<Set<string>> {
 
 async function fetchHackerTargetHosts(domain: string): Promise<Set<string>> {
   const url = `${HACKERTARGET_URL}?q=${encodeURIComponent(domain)}`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "ReconForge/1.0" },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok) return new Set();
-  const text = await res.text();
-  if (text.toLowerCase().includes("error") && text.length < 120) return new Set();
-  return parseHackerTargetHosts(text, domain);
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "ReconForge/1.0" },
+      signal: AbortSignal.timeout(TIMEOUTS.hackerTarget),
+    });
+    if (!res.ok) return new Set();
+    const text = await res.text();
+    if (text.toLowerCase().includes("error") && text.length < 120) return new Set();
+    return parseHackerTargetHosts(text, domain);
+  } catch {
+    return new Set();
+  }
 }
 
 async function resolveDns(host: string): Promise<string | null> {
-  for (const type of ["A", "AAAA"] as const) {
-    const url = `${DNS_QUERY_URL}?name=${encodeURIComponent(host)}&type=${type}`;
-    try {
-      const res = await fetch(url, {
-        headers: { Accept: "application/dns-json" },
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (!res.ok) continue;
-      const data = (await res.json()) as DnsJson;
-      const answer = data.Answer?.find((a) => a.type === 1 || a.type === 28);
-      if (answer?.data) return answer.data;
-    } catch {
-      // try next record type
+  for (const base of DNS_PROVIDERS) {
+    for (const type of ["A", "AAAA"] as const) {
+      const url = `${base}?name=${encodeURIComponent(host)}&type=${type}`;
+      try {
+        const res = await fetch(url, {
+          headers: { Accept: "application/dns-json" },
+          signal: AbortSignal.timeout(TIMEOUTS.dns),
+        });
+        if (!res.ok) continue;
+        const data = (await res.json()) as DnsJson;
+        const answer = data.Answer?.find((a) => a.type === 1 || a.type === 28);
+        if (answer?.data) return answer.data;
+      } catch {
+        // try next resolver / record type
+      }
     }
   }
   return null;
@@ -133,7 +155,8 @@ async function probeHttp(host: string): Promise<number> {
       const res = await fetch(url, {
         method,
         redirect: "manual",
-        signal: AbortSignal.timeout(8_000),
+        signal: AbortSignal.timeout(TIMEOUTS.http),
+        headers: { "User-Agent": "ReconForge/1.0" },
       });
       if (res.status > 0) return res.status;
     } catch {
@@ -155,6 +178,47 @@ function sortHosts(hosts: string[], domain: string): string[] {
   });
 }
 
+async function verifyHost(
+  host: string,
+  domain: string,
+  httpProbe: boolean
+): Promise<SubdomainEntry | null> {
+  const ip = await resolveDns(host);
+  if (!ip) return null;
+
+  let status = 0;
+  if (httpProbe) {
+    status = await probeHttp(host);
+  }
+
+  return {
+    host,
+    ip,
+    // DNS-verified host counts as alive; 0 = DNS only (HTTP timed out)
+    status: status || 200,
+    services: inferServices(host, domain),
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const i = index++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 export interface EnumerateOptions {
   depth: ScanDepth;
   onCandidate?: (message: string) => void;
@@ -172,49 +236,59 @@ export async function* enumerateSubdomainsStream(
   domain: string,
   options: Pick<EnumerateOptions, "depth">
 ): AsyncGenerator<SubdomainStreamEvent> {
-  const maxHosts = options.depth === "deep" ? 60 : 25;
+  const limits = options.depth === "deep" ? LIMITS.deep : LIMITS.quick;
   const candidates = new Set<string>([domain, `www.${domain}`]);
 
-  yield { kind: "status", message: `Querying Certificate Transparency (crt.sh) for ${domain}...` };
-  const crtHosts = await fetchCrtShHosts(domain);
+  yield { kind: "status", message: `Querying CT logs + passive DNS in parallel (timeout ${TIMEOUTS.crtSh / 1000}s)...` };
+
+  const [crtHosts, htHosts] = await Promise.all([
+    fetchCrtShHosts(domain),
+    fetchHackerTargetHosts(domain),
+  ]);
+
   for (const host of crtHosts) candidates.add(host);
-  yield { kind: "status", message: `crt.sh returned ${crtHosts.size} certificate hostnames` };
+  for (const host of htHosts) candidates.add(host);
 
-  if (candidates.size < 5) {
-    yield { kind: "status", message: "Supplementing with passive DNS (hackertarget)..." };
-    const htHosts = await fetchHackerTargetHosts(domain);
-    for (const host of htHosts) candidates.add(host);
-    yield { kind: "status", message: `Passive DNS added ${htHosts.size} candidates` };
-  }
+  yield {
+    kind: "status",
+    message: `Sources: crt.sh=${crtHosts.size}, passive DNS=${htHosts.size} → ${candidates.size} unique candidates`,
+  };
 
-  const sorted = sortHosts([...candidates], domain).slice(0, maxHosts * 3);
+  const sorted = sortHosts([...candidates], domain).slice(0, limits.maxCandidates);
   const total = sorted.length;
-  yield { kind: "status", message: `Verifying ${total} candidate hosts via DNS + HTTP...` };
+
+  yield {
+    kind: "status",
+    message: `Verifying ${total} hosts (${limits.concurrency} parallel, DNS ${TIMEOUTS.dns / 1000}s, HTTP ${TIMEOUTS.http / 1000}s)...`,
+  };
 
   const alive: SubdomainEntry[] = [];
-  for (let i = 0; i < sorted.length; i++) {
-    const host = sorted[i];
-    const current = i + 1;
-    yield { kind: "progress", current, total, host, state: "checking" };
+  let checked = 0;
 
-    const ip = await resolveDns(host);
-    if (!ip) {
-      yield { kind: "progress", current, total, host, state: "dead" };
-      continue;
+  for (let offset = 0; offset < sorted.length && alive.length < limits.maxAlive; offset += limits.concurrency) {
+    const batch = sorted.slice(offset, offset + limits.concurrency);
+
+    for (const host of batch) {
+      checked++;
+      yield { kind: "progress", current: checked, total, host, state: "checking" };
     }
 
-    const status = await probeHttp(host);
-    const entry: SubdomainEntry = {
-      host,
-      ip,
-      status: status || 200,
-      services: inferServices(host, domain),
-    };
-    alive.push(entry);
-    yield { kind: "progress", current, total, host, state: "alive" };
-    yield { kind: "verified", entry };
+    const results = await mapWithConcurrency(batch, limits.concurrency, (host) =>
+      verifyHost(host, domain, limits.httpProbe)
+    );
 
-    if (alive.length >= maxHosts) break;
+    for (let i = 0; i < batch.length; i++) {
+      const host = batch[i];
+      const entry = results[i];
+      if (!entry) {
+        yield { kind: "progress", current: checked - batch.length + i + 1, total, host, state: "dead" };
+        continue;
+      }
+      alive.push(entry);
+      yield { kind: "progress", current: checked - batch.length + i + 1, total, host, state: "alive" };
+      yield { kind: "verified", entry };
+      if (alive.length >= limits.maxAlive) break;
+    }
   }
 
   yield { kind: "status", message: `Enumeration complete — ${alive.length} live host(s) found` };

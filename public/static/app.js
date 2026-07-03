@@ -54,6 +54,11 @@ const scanElapsed = $("#scan-elapsed");
 const logCount = $("#log-count");
 const logWaiting = $("#log-waiting");
 const progressFill = $("#scan-progress-fill");
+const subdomainList = $("#subdomain-list");
+const subdomainCount = $("#subdomain-count");
+const subdomainEmptyRow = $("#subdomain-empty-row");
+
+let liveSubdomains = [];
 
 // ── Mermaid Init ────────────────────────────────────────────────────
 if (typeof mermaid !== "undefined") {
@@ -204,7 +209,7 @@ function startScanTimers() {
   activityTimer = setInterval(() => {
     if (!scanRunning) return;
     const idleMs = Date.now() - lastEventAt;
-    if (idleMs > 2500 && currentRunningPhase > 0) {
+    if (idleMs > 5000 && currentRunningPhase > 0) {
       const phase = PHASES[currentRunningPhase - 1];
       setScanActivity(`Still working on Phase ${currentRunningPhase}: ${phase?.name || "pipeline"}... (${Math.floor(idleMs / 1000)}s)`);
     }
@@ -238,6 +243,66 @@ function escapeHtml(str) {
   const d = document.createElement("div");
   d.textContent = str;
   return d.innerHTML;
+}
+
+function resetSubdomainList() {
+  liveSubdomains = [];
+  if (subdomainCount) subdomainCount.textContent = "0 hosts";
+  if (subdomainList) {
+    subdomainList.innerHTML = `
+      <tr id="subdomain-empty-row">
+        <td colspan="4" class="p-4 text-center text-forge-muted">Subdomains will appear during Phase 2...</td>
+      </tr>`;
+  }
+}
+
+function statusClass(code) {
+  if (!code || code === 0) return "text-forge-muted";
+  if (code >= 200 && code < 400) return "text-forge-safe";
+  if (code >= 400 && code < 500) return "text-forge-warn";
+  return "text-forge-danger";
+}
+
+function appendSubdomainRow(entry) {
+  if (!subdomainList) return;
+  const empty = subdomainList.querySelector("#subdomain-empty-row");
+  if (empty) empty.remove();
+
+  const exists = liveSubdomains.some((s) => s.host === entry.host);
+  if (exists) return;
+
+  liveSubdomains.push(entry);
+  liveSubdomains.sort((a, b) => a.host.localeCompare(b.host));
+
+  subdomainList.innerHTML = liveSubdomains
+    .map(
+      (s) => `
+    <tr class="border-t border-forge-border/50 hover:bg-forge-surface/50">
+      <td class="p-2 text-forge-accent2">${escapeHtml(s.host)}</td>
+      <td class="p-2 text-forge-muted">${escapeHtml(s.ip)}</td>
+      <td class="p-2 ${statusClass(s.status)}">${s.status || "DNS"}</td>
+      <td class="p-2 text-forge-muted">${escapeHtml((s.services || []).join(", "))}</td>
+    </tr>`
+    )
+    .join("");
+
+  if (subdomainCount) {
+    subdomainCount.textContent = `${liveSubdomains.length} host${liveSubdomains.length === 1 ? "" : "s"}`;
+  }
+}
+
+function renderSubdomainTable(subdomains) {
+  if (!subdomains?.length) {
+    resetSubdomainList();
+    if (subdomainList) {
+      subdomainList.innerHTML = `
+        <tr><td colspan="4" class="p-4 text-center text-forge-warn">No live subdomains found — try Deep Scan or check target DNS.</td></tr>`;
+    }
+    return;
+  }
+  liveSubdomains = [];
+  subdomainList.innerHTML = "";
+  for (const entry of subdomains) appendSubdomainRow(entry);
 }
 
 function setProgress(pct) {
@@ -296,6 +361,7 @@ async function launchScan() {
   if (logCount) logCount.textContent = "0 events";
   initPhaseIndicators();
   setAllPhasesPending();
+  resetSubdomainList();
   setProgress(0);
   setScanActivity("Connecting to recon pipeline...", true);
   scanRunning = true;
@@ -423,6 +489,9 @@ function handleScanEvent(type, data) {
     case "log":
       appendLog(data);
       break;
+    case "subdomain":
+      appendSubdomainRow(data);
+      break;
     case "complete":
       onScanComplete(data);
       break;
@@ -461,6 +530,7 @@ async function onScanComplete(slimReport) {
   }
 
   sectionMindmap.classList.remove("hidden");
+  renderSubdomainTable(currentReport.subdomains || liveSubdomains);
   await renderMindmap(currentReport.mindmap);
 
   sectionReport.classList.remove("hidden");

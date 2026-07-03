@@ -174,6 +174,7 @@ function generateSynthesis(
 export type ScanEvent =
   | { type: "phase"; data: PhaseEvent }
   | { type: "log"; data: LogEntry }
+  | { type: "subdomain"; data: SubdomainEntry }
   | { type: "complete"; data: Omit<ReconReport, "markdown" | "html"> };
 
 /** Async generator that yields scan events phase-by-phase */
@@ -245,7 +246,7 @@ export async function* runReconScan(
         data: { phase: 2, name: PHASES[1].name, status: "running", progress: phasePct, detail },
       };
       if (event.state === "checking") {
-        yield { type: "log", data: log(2, "info", `→ ${detail}`) };
+        // skip per-host checking logs to reduce noise/timeouts in live feed
       } else if (event.state === "dead") {
         yield { type: "log", data: log(2, "info", `✗ ${event.host} — no DNS record`) };
       }
@@ -255,6 +256,7 @@ export async function* runReconScan(
     if (event.kind === "verified") {
       subdomains.push(event.entry);
       const sub = event.entry;
+      yield { type: "subdomain", data: sub };
       yield {
         type: "log",
         data: log(

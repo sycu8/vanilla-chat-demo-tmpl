@@ -152,6 +152,33 @@
         </div>
       </div>
 
+      <!-- Subdomain list (live during scan + after) -->
+      <div class="forge-card">
+        <div class="flex items-center justify-between mb-3 gap-4">
+          <h4 class="text-sm font-semibold text-forge-accent2 uppercase tracking-wider">
+            Discovered Subdomains
+          </h4>
+          <span id="subdomain-count" class="text-xs font-mono text-forge-muted">0 hosts</span>
+        </div>
+        <div class="overflow-x-auto max-h-[320px] overflow-y-auto rounded-lg border border-forge-border">
+          <table class="w-full text-xs">
+            <thead class="sticky top-0 bg-forge-surface text-forge-muted">
+              <tr>
+                <th class="text-left p-2 font-semibold">Host</th>
+                <th class="text-left p-2 font-semibold">IP</th>
+                <th class="text-left p-2 font-semibold">HTTP</th>
+                <th class="text-left p-2 font-semibold">Services</th>
+              </tr>
+            </thead>
+            <tbody id="subdomain-list" class="font-mono text-forge-text">
+              <tr id="subdomain-empty-row">
+                <td colspan="4" class="p-4 text-center text-forge-muted">Subdomains will appear during Phase 2...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="grid lg:grid-cols-3 gap-6">
         <!-- Phase Indicators -->
         <div class="lg:col-span-1 space-y-2" id="phase-indicators">

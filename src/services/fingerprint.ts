@@ -5,6 +5,7 @@
 import type { ScanDepth, TechFingerprint } from "../lib/types";
 
 const BODY_LIMIT = 48_000;
+const PROBE_TIMEOUT_MS = 18_000;
 const SECURITY_HEADERS = [
   "strict-transport-security",
   "content-security-policy",
@@ -33,7 +34,7 @@ async function probeHost(host: string): Promise<ProbeResult | null> {
     const res = await fetch(url, {
       method: "GET",
       redirect: "follow",
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
         "User-Agent": "ReconForge/1.0 (security-recon)",
