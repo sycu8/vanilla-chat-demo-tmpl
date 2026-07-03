@@ -4,11 +4,17 @@ export type ScanDepth = "quick" | "deep";
 export type LogLevel = "info" | "warn" | "error" | "success";
 export type RiskLevel = "info" | "medium" | "high";
 
+export interface ScanScope {
+  include?: string[];
+  exclude?: string[];
+}
+
 export interface ScanRequest {
   target: string;
   keywords: string[];
   depth: ScanDepth;
   simulation: boolean;
+  scope?: ScanScope;
 }
 
 export interface LogEntry {
@@ -54,6 +60,10 @@ export interface TechFingerprint {
   /** Security header score 0–100 (higher = better) */
   securityScore?: number;
   missingHeaders?: string[];
+  /** WAF/CDN detected in front of origin */
+  waf?: string;
+  /** TLS certificate subject (when available) */
+  tlsIssuer?: string;
 }
 
 export interface SecurityFinding {

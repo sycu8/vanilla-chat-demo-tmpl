@@ -164,6 +164,7 @@ function detectFromHeaders(headers: Headers): {
   framework?: string;
   cms?: string;
   cdn?: string;
+  waf?: string;
   notable: string[];
 } {
   const notable: string[] = [];
@@ -194,6 +195,13 @@ function detectFromHeaders(headers: Headers): {
     else framework = poweredBy;
   }
   if (via && /cloudfront/i.test(via)) cdn = "Amazon CloudFront";
+
+  let waf: string | undefined;
+  if (headers.get("x-sucuri-id")) waf = "Sucuri WAF";
+  else if (headers.get("x-akamai-transformed")) waf = "Akamai";
+  else if (headers.get("x-cdn")?.includes("incapsula")) waf = "Imperva";
+  else if (cfRay) waf = "Cloudflare";
+
   if (server) {
     if (/nginx/i.test(server)) notable.push("nginx");
     if (/apache/i.test(server)) notable.push("apache");
@@ -204,7 +212,7 @@ function detectFromHeaders(headers: Headers): {
     if (headers.has(name)) notable.push(name);
   }
 
-  return { server, framework, cms, cdn, notable };
+  return { server, framework, cms, cdn, notable, waf };
 }
 
 export function buildFingerprint(host: string, probe: ProbeResult): TechFingerprint {
@@ -217,6 +225,7 @@ export function buildFingerprint(host: string, probe: ProbeResult): TechFingerpr
   const server = [fromHeaders.server, fromHeaders.cdn].filter(Boolean).join(" / ") || undefined;
   const version = fromHtml.version;
   const title = extractTitle(probe.body);
+  const waf = fromHeaders.waf;
 
   const headers = [...new Set([...fromHeaders.notable, ...fromHtml.signals])].slice(0, 12);
 
@@ -232,6 +241,7 @@ export function buildFingerprint(host: string, probe: ProbeResult): TechFingerpr
     finalUrl: probe.finalUrl !== `https://${host}` && probe.finalUrl !== `https://${host}/` ? probe.finalUrl : undefined,
     securityScore: score,
     missingHeaders: missing,
+    waf,
   };
 }
 

@@ -9,6 +9,8 @@
  */
 
 import { createRng, domainSeed, extractDomain } from "../lib/domain";
+import { filterHostsInScope } from "../lib/scope";
+import type { ReconEnv } from "../lib/env";
 import { matchVulnerabilities } from "../lib/cve";
 import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
@@ -16,6 +18,12 @@ import { enumerateDnsRecords, dnsRecordsToOsint } from "./dns-intel";
 import { scanExposure, scanExposureStream } from "./exposure";
 import { enumerateSubdomains, enumerateSubdomainsStream, getApexDomain } from "./subdomain";
 import { fingerprintHosts, fingerprintHostsStream, formatFingerprint } from "./fingerprint";
+import { gatherLiveOsint } from "./osint-live";
+import { fetchNvdCves, mergeVulnerabilities } from "./nvd";
+import { runTemplateProbes } from "./templates";
+import { detectTakeoverCandidates } from "./takeover";
+import { bruteDirectories } from "./dirbrute";
+import { saveScan } from "../lib/storage";
 import type {
   LogEntry,
   OsintFinding,
@@ -212,9 +220,45 @@ export type ScanEvent =
   | { type: "subdomain"; data: SubdomainEntry }
   | { type: "complete"; data: Omit<ReconReport, "markdown" | "html"> };
 
+async function resolveVulnerabilities(
+  fingerprints: TechFingerprint[],
+  depth: ScanDepth,
+  apex: string,
+  env?: ReconEnv
+): Promise<Vulnerability[]> {
+  const catalog = matchVulnerabilities(fingerprints, depth, apex);
+  let nvd: Vulnerability[] = [];
+  try {
+    nvd = await fetchNvdCves(fingerprints, env?.NVD_API_KEY, depth === "deep" ? 3 : 2);
+  } catch {
+    // NVD optional
+  }
+  const max = depth === "deep" ? 35 : 22;
+  return mergeVulnerabilities(catalog, nvd).slice(0, max);
+}
+
+async function resolveSecurityFindings(
+  fingerprints: TechFingerprint[],
+  dnsRecords: DnsRecord[],
+  apex: string,
+  depth: ScanDepth
+): Promise<SecurityFinding[]> {
+  const hosts = fingerprints.map((f) => f.host);
+  const fromExposure = await scanExposure(fingerprints, dnsRecords, apex, depth);
+  const fromTemplates = await runTemplateProbes(fingerprints, depth);
+  const fromTakeover = await detectTakeoverCandidates(hosts);
+  const fromDirs = await bruteDirectories(hosts, depth);
+  const merged = new Map<string, SecurityFinding>();
+  for (const f of [...fromExposure, ...fromTemplates, ...fromTakeover, ...fromDirs]) {
+    merged.set(f.id, f);
+  }
+  return [...merged.values()];
+}
+
 /** Async generator that yields scan events phase-by-phase */
 export async function* runReconScan(
-  request: ScanRequest
+  request: ScanRequest,
+  env?: ReconEnv
 ): AsyncGenerator<ScanEvent> {
   const domain = extractDomain(request.target);
   const apex = getApexDomain(domain);
@@ -232,27 +276,22 @@ export async function* runReconScan(
   };
   yield { type: "log", data: log(1, "info", `[LIVE] Querying DNS records (MX, TXT, SPF, DMARC, NS)...`) };
   const dnsRecords: DnsRecord[] = await enumerateDnsRecords(apex);
-  const liveOsint = dnsRecordsToOsint(dnsRecords);
-  for (const finding of liveOsint) {
+  const liveDnsOsint = dnsRecordsToOsint(dnsRecords);
+  const liveOsintExtra = await gatherLiveOsint(domain, request.keywords, env?.SHODAN_API_KEY);
+  for (const finding of [...liveDnsOsint, ...liveOsintExtra]) {
     yield {
       type: "log",
       data: log(1, finding.risk === "high" ? "warn" : "success", `[LIVE ${finding.category}] ${finding.detail}`),
     };
-    await delay(150);
   }
 
-  if (!request.simulation) {
-    yield { type: "log", data: log(1, "info", "Querying public records and social graph...") };
-    await delay(350);
-  } else {
-    yield { type: "log", data: log(1, "info", "[SIM] Generating social-engineering intelligence...") };
-    await delay(300);
+  if (request.simulation) {
+    yield { type: "log", data: log(1, "info", "[SIM] Adding social-engineering training scenarios...") };
   }
   yield { type: "log", data: log(1, "info", `Analyzing keywords: ${request.keywords.join(", ") || "(none)"}`) };
-  await delay(200);
 
   const simOsint = request.simulation ? generateOsint(domain, request.keywords, rng) : [];
-  const osint: OsintFinding[] = [...liveOsint, ...simOsint];
+  const osint: OsintFinding[] = [...liveDnsOsint, ...liveOsintExtra, ...simOsint];
   for (const finding of simOsint) {
     yield {
       type: "log",
@@ -324,6 +363,14 @@ export async function* runReconScan(
       type: "log",
       data: log(2, "warn", `No resolvable subdomains found for ${domain}`),
     };
+  } else if (request.scope?.include?.length || request.scope?.exclude?.length) {
+    const allowed = new Set(filterHostsInScope(subdomains.map((s) => s.host), apex, request.scope));
+    const before = subdomains.length;
+    subdomains.splice(0, subdomains.length, ...subdomains.filter((s) => allowed.has(s.host)));
+    yield {
+      type: "log",
+      data: log(2, "info", `Scope filter: ${subdomains.length}/${before} hosts in scope`),
+    };
   }
 
   yield {
@@ -384,17 +431,16 @@ export async function* runReconScan(
     type: "phase",
     data: { phase: 4, name: PHASES[3].name, status: "running", progress: 60, detail: "Matching CVE databases..." },
   };
-  yield { type: "log", data: log(4, "info", "Cross-referencing tech stack against CVE databases (NVD, OSV)...") };
-  await delay(300);
+  yield { type: "log", data: log(4, "info", "Cross-referencing catalog + NVD CVE databases...") };
 
-  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, apex);
+  const vulnerabilities = await resolveVulnerabilities(fingerprints, request.depth, apex, env);
   for (const vuln of vulnerabilities) {
     yield {
       type: "log",
       data: log(
         4,
         vuln.severity === "high" ? "error" : vuln.severity === "medium" ? "warn" : "info",
-        `${vuln.cve} [CVSS ${vuln.cvss}] on ${vuln.host} (${vuln.technology}): ${vuln.description}`
+        `${vuln.cve} [CVSS ${vuln.cvss}] on ${vuln.host} (${vuln.technology}): ${vuln.description.slice(0, 100)}`
       ),
     };
     yield {
@@ -403,7 +449,7 @@ export async function* runReconScan(
     };
   }
 
-  yield { type: "log", data: log(4, "info", "[LIVE] Running Nuclei-style exposure checks (headers, sensitive paths)...") };
+  yield { type: "log", data: log(4, "info", "[LIVE] Nuclei-style templates + takeover + directory probes...") };
 
   const securityFindings: SecurityFinding[] = [];
   for await (const event of scanExposureStream(fingerprints, dnsRecords, apex, request.depth)) {
@@ -424,6 +470,19 @@ export async function* runReconScan(
         `[${event.entry.category.toUpperCase()}] ${event.entry.host}: ${event.entry.title}`
       ),
     };
+  }
+
+  for (const extra of await runTemplateProbes(fingerprints, request.depth)) {
+    if (!securityFindings.some((f) => f.id === extra.id)) securityFindings.push(extra);
+    yield { type: "log", data: log(4, "warn", `[TEMPLATE] ${extra.host}: ${extra.title}`) };
+  }
+  for (const extra of await detectTakeoverCandidates(fingerprints.map((f) => f.host))) {
+    if (!securityFindings.some((f) => f.id === extra.id)) securityFindings.push(extra);
+    yield { type: "log", data: log(4, extra.severity === "high" ? "error" : "warn", `[TAKEOVER] ${extra.host}: ${extra.title}`) };
+  }
+  for (const extra of await bruteDirectories(fingerprints.map((f) => f.host), request.depth)) {
+    if (!securityFindings.some((f) => f.id === extra.id)) securityFindings.push(extra);
+    yield { type: "log", data: log(4, "info", `[DIR] ${extra.host}: ${extra.title}`) };
   }
 
   yield {
@@ -483,6 +542,14 @@ export async function* runReconScan(
   report.mindmap = buildMindmap(report);
   report = enrichReport(report);
 
+  if (env) {
+    try {
+      await saveScan(env, report);
+    } catch {
+      // persistence optional
+    }
+  }
+
   yield {
     type: "phase",
     data: { phase: 5, name: PHASES[4].name, status: "complete", progress: 100 },
@@ -496,27 +563,36 @@ export async function* runReconScan(
 }
 
 /** Generate report (for regenerate mindmap / report endpoints) */
-export async function buildReportFromRequest(request: ScanRequest): Promise<ReconReport> {
+export async function buildReportFromRequest(request: ScanRequest, env?: ReconEnv): Promise<ReconReport> {
   const domain = extractDomain(request.target);
   const apex = getApexDomain(domain);
   const rng = createRng(domainSeed(domain));
   const dnsRecords = await enumerateDnsRecords(apex);
-  const liveOsint = dnsRecordsToOsint(dnsRecords);
+  const liveOsint = [
+    ...dnsRecordsToOsint(dnsRecords),
+    ...(await gatherLiveOsint(domain, request.keywords, env?.SHODAN_API_KEY)),
+  ];
   const simOsint = request.simulation ? generateOsint(domain, request.keywords, rng) : [];
   const osint = [...liveOsint, ...simOsint];
-  const subdomains = await enumerateSubdomains(domain, { depth: request.depth });
+
+  let subdomains = await enumerateSubdomains(domain, { depth: request.depth });
+  if (request.scope?.include?.length || request.scope?.exclude?.length) {
+    const allowed = new Set(filterHostsInScope(subdomains.map((s) => s.host), apex, request.scope));
+    subdomains = subdomains.filter((s) => allowed.has(s.host));
+  }
+
   const fingerprints = await fingerprintHosts(
     subdomains.map((s) => s.host),
     request.depth
   );
-  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, apex);
-  const securityFindings = await scanExposure(fingerprints, dnsRecords, apex, request.depth);
+  const vulnerabilities = await resolveVulnerabilities(fingerprints, request.depth, apex, env);
+  const securityFindings = await resolveSecurityFindings(fingerprints, dnsRecords, apex, request.depth);
   const riskScore = calculateRiskScore(vulnerabilities, subdomains, securityFindings, dnsRecords);
   const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "info";
   const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, securityFindings, riskScore, rng);
 
   let report: ReconReport = {
-    id: `rf-${domainSeed(domain).toString(36)}`,
+    id: `rf-${domainSeed(domain).toString(36)}-${Date.now().toString(36)}`,
     target: request.target,
     domain,
     keywords: request.keywords,
@@ -540,7 +616,9 @@ export async function buildReportFromRequest(request: ScanRequest): Promise<Reco
   };
 
   report.mindmap = buildMindmap(report);
-  return enrichReport(report);
+  report = enrichReport(report);
+  if (env) await saveScan(env, report).catch(() => {});
+  return report;
 }
 
 export { PHASES };

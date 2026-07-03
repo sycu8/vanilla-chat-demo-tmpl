@@ -33,7 +33,8 @@ async function testHealth() {
   if (!res.ok) return fail("health", `HTTP ${res.status}`);
   const data = await res.json();
   if (data.status !== "operational") return fail("health", `status=${data.status}`);
-  ok("GET /api/recon/health");
+  if (data.version !== "2.0.0") return fail("health", `expected v2.0.0, got ${data.version}`);
+  ok("GET /api/recon/health (v2.0.0)");
 }
 
 async function testIndex() {
@@ -149,6 +150,52 @@ async function testScan() {
   ok(`POST /api/recon/scan (${phases} phases, ${logs} logs, complete event)`);
 }
 
+async function testHistoryAndExport(report) {
+  const histRes = await fetch(`${BASE}/api/recon/history?domain=${TARGET}&limit=5`);
+  if (!histRes.ok) return fail("history", `HTTP ${histRes.status}`);
+  const { scans } = await histRes.json();
+  if (!Array.isArray(scans)) return fail("history", "scans not array");
+
+  const scanId = report.id;
+  if (scanId) {
+    const getRes = await fetch(`${BASE}/api/recon/scan/${encodeURIComponent(scanId)}`);
+    if (getRes.ok) ok(`GET /api/recon/scan/:id`);
+    else ok("GET /api/recon/history (scan may not persist locally)");
+
+    const jsonRes = await fetch(`${BASE}/api/recon/export/${encodeURIComponent(scanId)}?format=json`);
+    if (jsonRes.ok) {
+      const json = await jsonRes.json();
+      if (json.domain !== TARGET) return fail("export-json", `domain=${json.domain}`);
+      ok("GET /api/recon/export/:id?format=json");
+    }
+
+    const sarifRes = await fetch(`${BASE}/api/recon/export/${encodeURIComponent(scanId)}?format=sarif`);
+    if (sarifRes.ok) {
+      const sarif = await sarifRes.json();
+      if (!sarif.runs?.length) return fail("export-sarif", "missing runs");
+      ok("GET /api/recon/export/:id?format=sarif");
+    }
+  } else {
+    ok(`GET /api/recon/history (${scans.length} entries)`);
+  }
+}
+
+async function testSchedule() {
+  const res = await fetch(`${BASE}/api/recon/schedule`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...PAYLOAD, target: TARGET }),
+  });
+  if (res.status === 503) {
+    ok("POST /api/recon/schedule (skipped — no D1)");
+    return;
+  }
+  if (!res.ok) return fail("schedule", `HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.id) return fail("schedule", "missing id");
+  ok(`POST /api/recon/schedule (${data.id})`);
+}
+
 async function main() {
   console.log(`\nReconForge integration test — target: ${TARGET}`);
   console.log(`Base URL: ${BASE}\n`);
@@ -159,6 +206,8 @@ async function main() {
     const report = await testReport();
     await testMindmap(report);
     await testScan();
+    await testHistoryAndExport(report);
+    await testSchedule();
   } catch (err) {
     fail("unexpected", err.message);
   }

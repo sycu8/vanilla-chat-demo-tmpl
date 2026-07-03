@@ -115,7 +115,21 @@
               <input type="checkbox" id="simulation" name="simulation" checked class="accent-forge-accent w-4 h-4" />
               <div>
                 <span class="text-sm font-medium">Enable Simulation Mode</span>
-                <p class="text-xs text-forge-muted">Generates realistic mock data — safe for demos and training</p>
+                <p class="text-xs text-forge-muted">Social-engineering scenarios (live recon still runs)</p>
+              </div>
+            </label>
+            <div>
+              <label for="scope-include" class="block text-sm font-medium text-forge-text mb-1">Scope Include <span class="text-forge-muted font-normal">(optional, comma-separated)</span></label>
+              <input type="text" id="scope-include" class="forge-input font-mono text-sm" placeholder="*.example.com, api.example.com" />
+            </div>
+            <div>
+              <label for="scope-exclude" class="block text-sm font-medium text-forge-text mb-1">Scope Exclude</label>
+              <input type="text" id="scope-exclude" class="forge-input font-mono text-sm" placeholder="staging.example.com" />
+            </div>
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" id="schedule-daily" class="accent-forge-accent w-4 h-4" />
+              <div>
+                <span class="text-sm font-medium">Schedule daily re-scan (06:00 UTC)</span>
               </div>
             </label>
           </div>
@@ -128,6 +142,25 @@
           Launch Recon
         </button>
       </form>
+
+      <!-- Scan History -->
+      <div id="section-history" class="forge-card max-w-2xl mx-auto mt-8">
+        <div class="flex items-center justify-between mb-4 gap-4">
+          <h3 class="text-lg font-bold text-forge-text">
+            Scan <span class="text-forge-accent">History</span>
+          </h3>
+          <button id="btn-refresh-history" class="forge-btn-secondary text-xs py-1.5 px-3" type="button">
+            Refresh
+          </button>
+        </div>
+        <div id="history-list" class="space-y-2 text-sm">
+          <p class="text-forge-muted text-center py-4">Loading scan history...</p>
+        </div>
+        <div id="diff-panel" class="hidden mt-4 pt-4 border-t border-forge-border">
+          <h4 class="text-sm font-semibold text-forge-accent2 mb-2">Scan Diff</h4>
+          <div id="diff-content" class="text-xs font-mono text-forge-muted space-y-1"></div>
+        </div>
+      </div>
     </section>
 
     <!-- ═══ SECTION: PIPELINE ═══ -->
@@ -258,6 +291,12 @@
           <button id="btn-download-html" class="forge-btn-secondary text-sm py-2" type="button">
             ⬇ HTML
           </button>
+          <button id="btn-download-json" class="forge-btn-secondary text-sm py-2" type="button">
+            ⬇ JSON
+          </button>
+          <button id="btn-download-sarif" class="forge-btn-secondary text-sm py-2" type="button">
+            ⬇ SARIF
+          </button>
         </div>
       </div>
 
@@ -272,7 +311,7 @@
 
   <!-- ═══ FOOTER ═══ -->
   <footer class="border-t border-forge-border mt-16 py-6 text-center text-xs text-forge-muted">
-    <p>ReconForge v1.0 — Built on <a href="https://developers.cloudflare.com/pages/" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Cloudflare Pages</a> + <a href="https://hono.dev" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Hono</a></p>
+    <p>ReconForge v2.0 — Built on <a href="https://developers.cloudflare.com/workers/" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Cloudflare Workers</a> + <a href="https://hono.dev" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Hono</a></p>
     <p class="mt-1">⚠️ For authorized security testing only. Simulation mode generates synthetic data.</p>
   </footer>
 

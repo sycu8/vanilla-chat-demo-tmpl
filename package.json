@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "reconforge",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "ReconForge — Autonomous Security Reconnaissance & Pentesting Tool on Cloudflare Pages",
   "scripts": {
     "dev": "concurrently \"npm:preview\" \"npm:watch:vite\" \"npm:watch:css\"",

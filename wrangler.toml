@@ -14,6 +14,18 @@ account_id = "4c15704ef706b9c8954cd6f9feb678d8"
 directory = "public"
 binding = "ASSETS"
 
-# Future live recon integrations (set via wrangler secret after deploy):
-# wrangler secret put SHODAN_API_KEY
-# wrangler secret put NVD_API_KEY
+[[d1_databases]]
+binding = "DB"
+database_name = "reconforge-scans"
+database_id = "3a04125d-8c56-4ee3-b30a-8f1d2107f6d0"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "SCAN_CACHE"
+id = "ea1bd59ddddf4a0da7e716dae128201e"
+
+[triggers]
+crons = ["0 6 * * *"]
+
+# Secrets (wrangler secret put ...):
+# RECON_API_KEY, SHODAN_API_KEY, NVD_API_KEY, URLSCAN_API_KEY, WEBHOOK_URL

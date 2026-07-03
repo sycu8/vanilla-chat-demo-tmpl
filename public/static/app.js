@@ -57,8 +57,13 @@ const progressFill = $("#scan-progress-fill");
 const subdomainList = $("#subdomain-list");
 const subdomainCount = $("#subdomain-count");
 const subdomainEmptyRow = $("#subdomain-empty-row");
+const historyList = $("#history-list");
+const diffPanel = $("#diff-panel");
+const diffContent = $("#diff-content");
 
 let liveSubdomains = [];
+let scanHistory = [];
+let selectedHistoryIds = [];
 
 // ── Mermaid Init ────────────────────────────────────────────────────
 if (typeof mermaid !== "undefined") {
@@ -345,10 +350,162 @@ function renderSubdomainTable(subdomains, vulnerabilities, fingerprints) {
   }
 }
 
+function parseScopeList(inputId) {
+  const raw = $(inputId)?.value?.trim() || "";
+  if (!raw) return undefined;
+  const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return list.length ? list : undefined;
+}
+
+function buildScanPayload() {
+  const target = targetInput.value.trim();
+  const keywords = $("#keywords").value.trim();
+  const depth = document.querySelector('input[name="depth"]:checked')?.value || "quick";
+  const simulation = $("#simulation").checked;
+  const scopeInclude = parseScopeList("#scope-include");
+  const scopeExclude = parseScopeList("#scope-exclude");
+
+  const payload = { target, keywords, depth, simulation };
+  if (scopeInclude) payload.scopeInclude = scopeInclude;
+  if (scopeExclude) payload.scopeExclude = scopeExclude;
+  return payload;
+}
+
+async function scheduleDailyScan(payload) {
+  try {
+    const res = await fetch("/api/recon/schedule", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.error || "Failed to schedule scan", "error");
+      return;
+    }
+    showToast(`Daily scan scheduled (${data.id})`, "success");
+  } catch (err) {
+    showToast(`Schedule failed: ${err.message}`, "error");
+  }
+}
+
 function setProgress(pct) {
   progressFill.style.width = `${pct}%`;
   progressFill.classList.remove("indeterminate");
   $("#scan-progress-text").textContent = `${pct}%`;
+}
+
+function riskLevelClass(level) {
+  if (level === "high") return "text-forge-danger";
+  if (level === "medium") return "text-forge-warn";
+  return "text-forge-safe";
+}
+
+function formatDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString();
+}
+
+async function loadScanHistory() {
+  if (!historyList) return;
+  historyList.innerHTML = '<p class="text-forge-muted text-center py-4">Loading scan history...</p>';
+
+  try {
+    const res = await fetch("/api/recon/history?limit=20");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    scanHistory = data.scans || [];
+    renderHistoryList();
+  } catch (err) {
+    historyList.innerHTML = `<p class="text-forge-muted text-center py-4">No scan history yet (${escapeHtml(err.message)})</p>`;
+  }
+}
+
+function renderHistoryList() {
+  if (!historyList) return;
+  if (!scanHistory.length) {
+    historyList.innerHTML = '<p class="text-forge-muted text-center py-4">No scans saved yet — run a recon to populate history.</p>';
+    return;
+  }
+
+  historyList.innerHTML = scanHistory
+    .map(
+      (s) => `
+    <div class="flex items-center gap-3 p-3 rounded-lg border border-forge-border hover:bg-forge-surface/50">
+      <input type="checkbox" class="history-select accent-forge-accent" data-id="${escapeHtml(s.id)}" aria-label="Select scan ${escapeHtml(s.domain)}" />
+      <div class="flex-1 min-w-0">
+        <div class="font-mono text-forge-accent2 truncate">${escapeHtml(s.domain)}</div>
+        <div class="text-xs text-forge-muted">${formatDate(s.createdAt)} · ${escapeHtml(s.depth)} · ${s.subdomainCount} hosts</div>
+      </div>
+      <div class="text-right shrink-0">
+        <div class="font-bold ${riskLevelClass(s.riskLevel)}">${s.riskScore}</div>
+        <div class="text-xs text-forge-muted">${s.vulnCount} CVE · ${s.exposureCount} exp</div>
+      </div>
+      <button type="button" class="history-load forge-btn-secondary text-xs py-1 px-2" data-id="${escapeHtml(s.id)}">Load</button>
+    </div>`
+    )
+    .join("");
+
+  historyList.querySelectorAll(".history-load").forEach((btn) => {
+    btn.addEventListener("click", () => loadHistoricalScan(btn.dataset.id));
+  });
+
+  historyList.querySelectorAll(".history-select").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      selectedHistoryIds = [...historyList.querySelectorAll(".history-select:checked")].map((el) => el.dataset.id);
+      if (selectedHistoryIds.length === 2) runScanDiff(selectedHistoryIds[0], selectedHistoryIds[1]);
+      else if (diffPanel) diffPanel.classList.add("hidden");
+    });
+  });
+}
+
+async function loadHistoricalScan(id) {
+  try {
+    const res = await fetch(`/api/recon/scan/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { report } = await res.json();
+    currentReport = report;
+
+    sectionInput.classList.add("hidden");
+    sectionPipeline.classList.remove("hidden");
+    sectionMindmap.classList.remove("hidden");
+    sectionReport.classList.remove("hidden");
+    btnNewScan.classList.remove("hidden");
+
+    $("#scan-target-label").textContent = report.domain;
+    renderSubdomainTable(report.subdomains, report.vulnerabilities, report.fingerprints);
+    await renderMindmap(report.mindmap);
+    renderDashboard(report);
+    renderReport(report);
+    showToast(`Loaded scan ${id}`, "success");
+    sectionReport.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (err) {
+    showToast(`Failed to load scan: ${err.message}`, "error");
+  }
+}
+
+async function runScanDiff(baseId, compareId) {
+  if (!diffPanel || !diffContent) return;
+  try {
+    const res = await fetch("/api/recon/diff", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseId, compareId }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { diff } = await res.json();
+    diffPanel.classList.remove("hidden");
+    const deltaSign = diff.riskScoreDelta >= 0 ? "+" : "";
+    diffContent.innerHTML = `
+      <div>Risk delta: <span class="${diff.riskScoreDelta > 0 ? "text-forge-danger" : diff.riskScoreDelta < 0 ? "text-forge-safe" : "text-forge-muted"}">${deltaSign}${diff.riskScoreDelta}</span></div>
+      <div>+${diff.newSubdomains.length} subdomains · -${diff.removedSubdomains.length} removed</div>
+      <div>+${diff.newCves.length} CVEs · -${diff.resolvedCves.length} resolved</div>
+      <div>+${diff.newExposures.length} exposures · -${diff.resolvedExposures.length} resolved</div>
+      ${diff.newSubdomains.length ? `<div class="text-forge-warn mt-1">New: ${diff.newSubdomains.slice(0, 5).join(", ")}${diff.newSubdomains.length > 5 ? "…" : ""}</div>` : ""}
+      ${diff.newCves.length ? `<div class="text-forge-danger mt-1">New CVEs: ${diff.newCves.slice(0, 3).join(", ")}${diff.newCves.length > 3 ? "…" : ""}</div>` : ""}`;
+  } catch (err) {
+    showToast(`Diff failed: ${err.message}`, "error");
+  }
 }
 
 // ── Domain Auto-detect ──────────────────────────────────────────────
@@ -381,12 +538,7 @@ scanForm.addEventListener("submit", async (e) => {
 });
 
 async function launchScan() {
-  const target = targetInput.value.trim();
-  const keywords = $("#keywords").value.trim();
-  const depth = document.querySelector('input[name="depth"]:checked')?.value || "quick";
-  const simulation = $("#simulation").checked;
-
-  if (!extractDomain(target)) {
+  if (!extractDomain(targetInput.value.trim())) {
     showToast("Please enter a valid URL or domain", "error");
     return;
   }
@@ -414,11 +566,15 @@ async function launchScan() {
   sectionReport.classList.add("hidden");
   btnNewScan.classList.remove("hidden");
 
-  $("#scan-target-label").textContent = extractDomain(target);
+  $("#scan-target-label").textContent = extractDomain(targetInput.value);
   $("#btn-launch").disabled = true;
 
-  const payload = { target, keywords, depth, simulation };
+  const payload = buildScanPayload();
   lastScanPayload = payload;
+
+  if ($("#schedule-daily")?.checked) {
+    scheduleDailyScan(payload);
+  }
 
   try {
     await streamScan(payload);
@@ -579,6 +735,7 @@ async function onScanComplete(slimReport) {
 
   setScanActivity(`Complete — ${currentReport.subdomains?.length || 0} live hosts, risk ${currentReport.riskScore}/100`, false);
   sectionMindmap.scrollIntoView({ behavior: "smooth", block: "start" });
+  loadScanHistory();
 }
 
 // ── Mindmap ─────────────────────────────────────────────────────────
@@ -757,6 +914,40 @@ $("#btn-download-html").addEventListener("click", () => {
   showToast("HTML report downloaded", "success");
 });
 
+$("#btn-download-json")?.addEventListener("click", async () => {
+  if (!currentReport?.id) return showToast("No scan ID — run a scan first", "error");
+  try {
+    const res = await fetch(`/api/recon/export/${encodeURIComponent(currentReport.id)}?format=json`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `reconforge-${currentReport.domain}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast("JSON export downloaded", "success");
+  } catch (err) {
+    showToast(`JSON export failed: ${err.message}`, "error");
+  }
+});
+
+$("#btn-download-sarif")?.addEventListener("click", async () => {
+  if (!currentReport?.id) return showToast("No scan ID — run a scan first", "error");
+  try {
+    const res = await fetch(`/api/recon/export/${encodeURIComponent(currentReport.id)}?format=sarif`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `reconforge-${currentReport.domain}.sarif.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast("SARIF export downloaded", "success");
+  } catch (err) {
+    showToast(`SARIF export failed: ${err.message}`, "error");
+  }
+});
+
 $("#btn-download-pdf").addEventListener("click", () => {
   if (!currentReport) return showToast("No report available", "error");
 
@@ -843,9 +1034,17 @@ btnNewScan.addEventListener("click", () => {
 
 // ── Init ────────────────────────────────────────────────────────────
 initPhaseIndicators();
+loadScanHistory();
+
+$("#btn-refresh-history")?.addEventListener("click", () => loadScanHistory());
 
 // Health check on load
 fetch("/api/recon/health")
   .then((r) => r.json())
-  .then((data) => console.log("[ReconForge] API status:", data.status))
+  .then((data) => {
+    console.log("[ReconForge] API v" + (data.version || "?") + ":", data.status);
+    if (data.version && statusBadge) {
+      statusBadge.title = `ReconForge ${data.version} — ${(data.features || []).join(", ")}`;
+    }
+  })
   .catch(() => console.warn("[ReconForge] API health check failed — will retry on scan"));
