@@ -56,7 +56,7 @@ async function testReport() {
   if (!report.mindmap?.includes("orangecloud.vn")) return fail("report", "mindmap missing domain");
   if (!report.markdown?.includes("orangecloud.vn")) return fail("report", "markdown missing domain");
   if (!report.html?.includes("orangecloud.vn")) return fail("report", "html missing domain");
-  if (report.subdomains.length < 2) return fail("report", "too few live subdomains");
+  if (report.subdomains.length < 5) return fail("report", `too few live subdomains (${report.subdomains.length})`);
   const hosts = report.subdomains.map((s) => s.host);
   const hasKnown = KNOWN_LIVE_HOSTS.some((h) => hosts.includes(h));
   if (!hasKnown) {

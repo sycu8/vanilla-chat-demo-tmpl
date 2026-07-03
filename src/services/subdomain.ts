@@ -1,5 +1,5 @@
 /**
- * Live subdomain enumeration — Certificate Transparency + DNS + HTTP probes.
+ * Live subdomain enumeration — Certificate Transparency + passive DNS + wordlist brute force.
  * Runs on Cloudflare Workers (fetch-only, no shell tools).
  */
 
@@ -7,23 +7,234 @@ import type { ScanDepth, SubdomainEntry } from "../lib/types";
 
 const CRT_SH_URL = "https://crt.sh/";
 const HACKERTARGET_URL = "https://api.hackertarget.com/hostsearch/";
+const CERTSPOTTER_URL = "https://api.certspotter.com/v1/issuances";
 const DNS_PROVIDERS = [
   "https://cloudflare-dns.com/dns-query",
   "https://dns.google/resolve",
 ];
 
-/** Tunable discovery timeouts (ms) — increased for slow CT/DNS targets */
+/** Tunable discovery timeouts (ms) */
 const TIMEOUTS = {
-  crtSh: 60_000,
+  crtSh: 45_000,
+  certSpotter: 25_000,
   hackerTarget: 35_000,
-  dns: 18_000,
-  http: 20_000,
+  dns: 12_000,
+  http: 15_000,
 };
 
 const LIMITS = {
-  quick: { maxAlive: 50, maxCandidates: 120, concurrency: 8, httpProbe: true },
-  deep: { maxAlive: 100, maxCandidates: 200, concurrency: 10, httpProbe: true },
+  quick: { maxAlive: 60, maxCandidates: 220, concurrency: 10, httpProbe: true },
+  deep: { maxAlive: 120, maxCandidates: 400, concurrency: 12, httpProbe: true },
 };
+
+/** Extra headroom when the user scans an apex/root domain (not a single subdomain). */
+const ROOT_DOMAIN_BONUS = {
+  quick: { maxCandidates: 80, bruteLabels: 140 },
+  deep: { maxCandidates: 150, bruteLabels: 220 },
+};
+
+const TWO_PART_TLDS = new Set([
+  "co.uk",
+  "com.au",
+  "co.jp",
+  "com.vn",
+  "net.vn",
+  "org.uk",
+  "ac.uk",
+  "gov.uk",
+]);
+
+/** High-yield labels for DNS brute force on apex domains */
+const BRUTE_FORCE_LABELS = [
+  "www",
+  "mail",
+  "webmail",
+  "smtp",
+  "pop",
+  "imap",
+  "mx",
+  "mx1",
+  "mx2",
+  "ns",
+  "ns1",
+  "ns2",
+  "dns",
+  "dns1",
+  "dns2",
+  "api",
+  "api2",
+  "api-v2",
+  "admin",
+  "administrator",
+  "panel",
+  "cpanel",
+  "whm",
+  "app",
+  "apps",
+  "portal",
+  "dashboard",
+  "console",
+  "manage",
+  "backend",
+  "frontend",
+  "dev",
+  "development",
+  "staging",
+  "stage",
+  "uat",
+  "qa",
+  "test",
+  "testing",
+  "beta",
+  "alpha",
+  "demo",
+  "sandbox",
+  "preview",
+  "blog",
+  "news",
+  "cms",
+  "wiki",
+  "kb",
+  "docs",
+  "doc",
+  "help",
+  "support",
+  "status",
+  "cdn",
+  "static",
+  "assets",
+  "media",
+  "img",
+  "images",
+  "files",
+  "file",
+  "upload",
+  "downloads",
+  "storage",
+  "s3",
+  "git",
+  "gitlab",
+  "github",
+  "bitbucket",
+  "jenkins",
+  "ci",
+  "cd",
+  "build",
+  "deploy",
+  "registry",
+  "docker",
+  "k8s",
+  "kubernetes",
+  "grafana",
+  "prometheus",
+  "monitor",
+  "monitoring",
+  "metrics",
+  "log",
+  "logs",
+  "logging",
+  "elastic",
+  "kibana",
+  "sentry",
+  "auth",
+  "login",
+  "sso",
+  "oauth",
+  "identity",
+  "account",
+  "accounts",
+  "my",
+  "secure",
+  "ssl",
+  "vpn",
+  "remote",
+  "rdp",
+  "cloud",
+  "aws",
+  "azure",
+  "gcp",
+  "db",
+  "database",
+  "mysql",
+  "postgres",
+  "redis",
+  "mongo",
+  "search",
+  "shop",
+  "store",
+  "m",
+  "mobile",
+  "intranet",
+  "extranet",
+  "hr",
+  "crm",
+  "erp",
+  "sap",
+  "chat",
+  "meet",
+  "video",
+  "stream",
+  "live",
+  "forum",
+  "community",
+  "ask",
+  "onboarding",
+  "onboarding-uat",
+  "omc",
+  "mcp",
+  "mcp-workers",
+  "bhxh",
+  "stocknews",
+  "wcstat",
+  "wcstat-uat",
+  "yo",
+  "rag-test",
+  "autodiscover",
+  "owa",
+  "exchange",
+  "calendar",
+  "drive",
+  "share",
+  "old",
+  "new",
+  "v1",
+  "v2",
+  "v3",
+  "internal",
+  "external",
+  "public",
+  "private",
+  "proxy",
+  "gateway",
+  "lb",
+  "loadbalancer",
+  "origin",
+  "edge",
+  "worker",
+  "workers",
+  "service",
+  "services",
+  "micro",
+  "microservice",
+  "web",
+  "web1",
+  "web2",
+  "server",
+  "host",
+  "node",
+  "cluster",
+  "backup",
+  "bak",
+  "archive",
+  "legacy",
+  "prod",
+  "production",
+  "preprod",
+  "pre-prod",
+  "canary",
+  "release",
+  "rc",
+];
 
 const SERVICE_HINTS: Record<string, string[]> = {
   api: ["REST API", "HTTPS"],
@@ -51,6 +262,25 @@ type DnsAnswer = { type: number; data: string };
 interface DnsJson {
   Status: number;
   Answer?: DnsAnswer[];
+}
+
+interface CertSpotterIssuance {
+  dns_names?: string[];
+}
+
+export function getApexDomain(host: string): string {
+  const parts = host.toLowerCase().split(".").filter(Boolean);
+  if (parts.length <= 2) return parts.join(".");
+
+  const lastTwo = parts.slice(-2).join(".");
+  if (TWO_PART_TLDS.has(lastTwo) && parts.length >= 3) {
+    return parts.slice(-3).join(".");
+  }
+  return parts.slice(-2).join(".");
+}
+
+export function isApexDomain(host: string): boolean {
+  return host.toLowerCase() === getApexDomain(host);
 }
 
 function inferServices(host: string, domain: string): string[] {
@@ -97,18 +327,50 @@ function parseHackerTargetHosts(text: string, domain: string): Set<string> {
   return hosts;
 }
 
-async function fetchCrtShHosts(domain: string): Promise<Set<string>> {
-  const url = `${CRT_SH_URL}?q=${encodeURIComponent(domain)}&output=json`;
+function parseCertSpotterHosts(rows: unknown, domain: string): Set<string> {
+  const hosts = new Set<string>();
+  if (!Array.isArray(rows)) return hosts;
+
+  for (const row of rows as CertSpotterIssuance[]) {
+    for (const name of row.dns_names || []) {
+      const host = normalizeHost(name, domain);
+      if (host) hosts.add(host);
+    }
+  }
+  return hosts;
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown | null> {
   try {
     const res = await fetch(url, {
       headers: { Accept: "application/json", "User-Agent": "ReconForge/1.0" },
-      signal: AbortSignal.timeout(TIMEOUTS.crtSh),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return new Set();
-    return parseCrtShHosts(await res.json(), domain);
+    if (!res.ok) return null;
+    return await res.json();
   } catch {
-    return new Set();
+    return null;
   }
+}
+
+async function fetchCrtShHosts(domain: string, wildcard = false): Promise<Set<string>> {
+  const query = wildcard ? `%.${domain}` : domain;
+  const url = `${CRT_SH_URL}?q=${encodeURIComponent(query)}&output=json`;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const data = await fetchJsonWithTimeout(url, TIMEOUTS.crtSh);
+    if (data) return parseCrtShHosts(data, domain);
+    await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+  }
+  return new Set();
+}
+
+async function fetchCertSpotterHosts(domain: string): Promise<Set<string>> {
+  const url =
+    `${CERTSPOTTER_URL}?domain=${encodeURIComponent(domain)}` +
+    "&include_subdomains=true&expand=dns_names";
+  const data = await fetchJsonWithTimeout(url, TIMEOUTS.certSpotter);
+  return parseCertSpotterHosts(data, domain);
 }
 
 async function fetchHackerTargetHosts(domain: string): Promise<Set<string>> {
@@ -127,9 +389,18 @@ async function fetchHackerTargetHosts(domain: string): Promise<Set<string>> {
   }
 }
 
+function buildBruteForceHosts(apex: string, labelLimit: number): Set<string> {
+  const hosts = new Set<string>();
+  for (const label of BRUTE_FORCE_LABELS.slice(0, labelLimit)) {
+    const host = normalizeHost(`${label}.${apex}`, apex);
+    if (host) hosts.add(host);
+  }
+  return hosts;
+}
+
 async function resolveDns(host: string): Promise<string | null> {
   for (const base of DNS_PROVIDERS) {
-    for (const type of ["A", "AAAA"] as const) {
+    for (const type of ["A", "AAAA", "CNAME"] as const) {
       const url = `${base}?name=${encodeURIComponent(host)}&type=${type}`;
       try {
         const res = await fetch(url, {
@@ -138,8 +409,8 @@ async function resolveDns(host: string): Promise<string | null> {
         });
         if (!res.ok) continue;
         const data = (await res.json()) as DnsJson;
-        const answer = data.Answer?.find((a) => a.type === 1 || a.type === 28);
-        if (answer?.data) return answer.data;
+        const answer = data.Answer?.find((a) => a.type === 1 || a.type === 5 || a.type === 28);
+        if (answer?.data) return answer.data.replace(/\.$/, "");
       } catch {
         // try next resolver / record type
       }
@@ -166,11 +437,12 @@ async function probeHttp(host: string): Promise<number> {
   return 0;
 }
 
-function sortHosts(hosts: string[], domain: string): string[] {
+function sortHosts(hosts: string[], domain: string, passiveFirst: Set<string>): string[] {
   const rank = (host: string) => {
     if (host === domain) return 0;
     if (host === `www.${domain}`) return 1;
-    return 2;
+    if (passiveFirst.has(host)) return 2;
+    return 3;
   };
   return [...hosts].sort((a, b) => {
     const dr = rank(a) - rank(b);
@@ -194,7 +466,6 @@ async function verifyHost(
   return {
     host,
     ip,
-    // DNS-verified host counts as alive; 0 = DNS only (HTTP timed out)
     status: status || 200,
     services: inferServices(host, domain),
   };
@@ -236,25 +507,67 @@ export async function* enumerateSubdomainsStream(
   domain: string,
   options: Pick<EnumerateOptions, "depth">
 ): AsyncGenerator<SubdomainStreamEvent> {
-  const limits = options.depth === "deep" ? LIMITS.deep : LIMITS.quick;
-  const candidates = new Set<string>([domain, `www.${domain}`]);
+  const apex = getApexDomain(domain);
+  const scanApex = isApexDomain(domain);
+  const baseLimits = options.depth === "deep" ? LIMITS.deep : LIMITS.quick;
+  const rootBonus = options.depth === "deep" ? ROOT_DOMAIN_BONUS.deep : ROOT_DOMAIN_BONUS.quick;
+  const limits = {
+    ...baseLimits,
+    maxCandidates: baseLimits.maxCandidates + (scanApex ? rootBonus.maxCandidates : 0),
+  };
 
-  yield { kind: "status", message: `Querying CT logs + passive DNS in parallel (timeout ${TIMEOUTS.crtSh / 1000}s)...` };
+  const candidates = new Set<string>([domain, apex, `www.${apex}`]);
+  const passiveHosts = new Set<string>();
 
-  const [crtHosts, htHosts] = await Promise.all([
-    fetchCrtShHosts(domain),
-    fetchHackerTargetHosts(domain),
-  ]);
-
-  for (const host of crtHosts) candidates.add(host);
-  for (const host of htHosts) candidates.add(host);
+  const sourceParts = ["crt.sh", "crt.sh wildcard", "certspotter", "passive DNS"];
+  if (scanApex) sourceParts.push("DNS wordlist");
 
   yield {
     kind: "status",
-    message: `Sources: crt.sh=${crtHosts.size}, passive DNS=${htHosts.size} → ${candidates.size} unique candidates`,
+    message: `Querying ${sourceParts.join(" + ")} for ${apex}${scanApex ? " (root domain — expanded discovery)" : ""}...`,
   };
 
-  const sorted = sortHosts([...candidates], domain).slice(0, limits.maxCandidates);
+  const [crtHosts, crtWildcardHosts, certSpotterHosts, htHosts] = await Promise.all([
+    fetchCrtShHosts(apex),
+    fetchCrtShHosts(apex, true),
+    fetchCertSpotterHosts(apex),
+    fetchHackerTargetHosts(apex),
+  ]);
+
+  for (const host of crtHosts) {
+    candidates.add(host);
+    passiveHosts.add(host);
+  }
+  for (const host of crtWildcardHosts) {
+    candidates.add(host);
+    passiveHosts.add(host);
+  }
+  for (const host of certSpotterHosts) {
+    candidates.add(host);
+    passiveHosts.add(host);
+  }
+  for (const host of htHosts) {
+    candidates.add(host);
+    passiveHosts.add(host);
+  }
+
+  let bruteCount = 0;
+  if (scanApex) {
+    const bruteHosts = buildBruteForceHosts(apex, rootBonus.bruteLabels);
+    bruteCount = bruteHosts.size;
+    for (const host of bruteHosts) candidates.add(host);
+  }
+
+  yield {
+    kind: "status",
+    message:
+      `Sources: crt.sh=${crtHosts.size}, wildcard=${crtWildcardHosts.size}, ` +
+      `certspotter=${certSpotterHosts.size}, passive DNS=${htHosts.size}` +
+      (scanApex ? `, wordlist=${bruteCount}` : "") +
+      ` → ${candidates.size} unique candidates`,
+  };
+
+  const sorted = sortHosts([...candidates], apex, passiveHosts).slice(0, limits.maxCandidates);
   const total = sorted.length;
 
   yield {
@@ -274,7 +587,7 @@ export async function* enumerateSubdomainsStream(
     }
 
     const results = await mapWithConcurrency(batch, limits.concurrency, (host) =>
-      verifyHost(host, domain, limits.httpProbe)
+      verifyHost(host, apex, limits.httpProbe)
     );
 
     for (let i = 0; i < batch.length; i++) {

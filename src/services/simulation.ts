@@ -1,5 +1,5 @@
 /**
- * Simulation engine — OSINT/CVE phases use seeded data; subdomains are live (crt.sh + DNS).
+ * Simulation engine — OSINT/CVE phases use seeded data; subdomains are live (CT + passive DNS + wordlist).
  *
  * PRODUCTION EXTENSION POINTS:
  * - Replace OSINT phase with Hunter.io, LinkedIn scraping APIs, Shodan
@@ -220,7 +220,7 @@ export async function* runReconScan(
     type: "phase",
     data: { phase: 2, name: PHASES[1].name, status: "running", progress: 20, detail: "Starting live subdomain enumeration..." },
   };
-  yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (crt.sh, DNS verify, HTTP probe)...") };
+  yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (CT logs, certspotter, passive DNS, wordlist)...") };
 
   const subdomains: SubdomainEntry[] = [];
   for await (const event of enumerateSubdomainsStream(domain, { depth: request.depth })) {
