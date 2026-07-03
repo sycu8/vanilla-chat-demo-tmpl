@@ -11,6 +11,7 @@
     "build:css": "tailwindcss -i src/style.css -o public/static/style.css --minify",
     "preview": "wrangler pages dev dist --live-reload",
     "deploy": "npm run build && wrangler deploy",
+    "deploy:prod": "bash -c 'set -a && source .cloudflare.env && set +a && npm run deploy'",
     "deploy:pages": "npm run build && wrangler pages deploy dist --project-name reconforge",
     "deploy:temporary": "npm run build && wrangler deploy --temporary",
     "typecheck": "tsc --noEmit",

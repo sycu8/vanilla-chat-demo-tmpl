@@ -3,11 +3,9 @@ name = "reconforge"
 main = "dist/_worker.js"
 compatibility_date = "2025-01-09"
 compatibility_flags = ["nodejs_compat"]
+account_id = "4c15704ef706b9c8954cd6f9feb678d8"
 
-# Set via env or uncomment after adding your account ID:
-# account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
-
-# Optional custom domain (requires zone on your Cloudflare account):
+# Optional custom domain (uncomment after DNS is ready):
 # [[routes]]
 # pattern = "reconforge.orangecloud.vn/*"
 # zone_name = "orangecloud.vn"
