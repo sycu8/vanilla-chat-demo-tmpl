@@ -675,7 +675,7 @@ $("#btn-download-pdf").addEventListener("click", () => {
     doc.setFontSize(8);
     doc.setTextColor(226, 232, 240);
     for (const v of currentReport.vulnerabilities.slice(0, 15)) {
-      if (y > 270) {
+      if (y > 260) {
         doc.addPage();
         y = 20;
       }
@@ -683,6 +683,13 @@ $("#btn-download-pdf").addEventListener("click", () => {
       const wrapped = doc.splitTextToSize(line, 180);
       doc.text(wrapped, 14, y);
       y += wrapped.length * 4 + 2;
+      if (v.remediation) {
+        doc.setTextColor(34, 197, 94);
+        const fix = doc.splitTextToSize(`Remediation: ${v.remediation}`, 176);
+        doc.text(fix, 16, y);
+        y += fix.length * 4 + 3;
+        doc.setTextColor(226, 232, 240);
+      }
     }
 
     // Footer

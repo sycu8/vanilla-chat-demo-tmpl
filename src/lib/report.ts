@@ -70,12 +70,12 @@ export function generateMarkdown(report: ReconReport): string {
   }
 
   lines.push(`## Phase 4: Vulnerability Intelligence`, ``);
-  lines.push(`| CVE | Severity | Technology | CVSS | Description |`);
-  lines.push(`|-----|----------|------------|------|-------------|`);
   for (const v of report.vulnerabilities) {
-    lines.push(
-      `| ${v.cve} | ${v.severity} | ${v.technology} | ${v.cvss} | ${v.description} |`
-    );
+    lines.push(`### ${v.cve} — ${v.severity.toUpperCase()} (CVSS ${v.cvss})`);
+    lines.push(`- **Technology:** ${v.technology}`);
+    lines.push(`- **Description:** ${v.description}`);
+    lines.push(`- **Remediation:** ${v.remediation}`);
+    lines.push(``);
   }
 
   lines.push(``, `## Phase 5: Intelligence Synthesis`, ``);
@@ -111,7 +111,14 @@ export function generateHtml(report: ReconReport): string {
   const vulnRows = report.vulnerabilities
     .map(
       (v) =>
-        `<tr><td><code>${v.cve}</code></td><td>${riskBadge(v.severity)}</td><td>${v.technology}</td><td>${v.cvss}</td><td>${v.description}</td></tr>`
+        `<tr>
+          <td><code>${v.cve}</code></td>
+          <td>${riskBadge(v.severity)}</td>
+          <td>${v.technology}</td>
+          <td>${v.cvss}</td>
+          <td>${v.description}</td>
+          <td class="remediation">${v.remediation}</td>
+        </tr>`
     )
     .join("");
 
@@ -153,6 +160,7 @@ export function generateHtml(report: ReconReport): string {
     .insight.high { border-left-color: #ef4444; }
     .insight.medium { border-left-color: #eab308; }
     .insight h4 { margin-bottom: 0.5rem; }
+    td.remediation { font-size: 0.85rem; color: #cbd5e1; max-width: 28rem; }
     .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #1e293b; color: #64748b; font-size: 0.8rem; text-align: center; }
     @media print { body { background: white; color: black; } .score-card { border: 1px solid #ccc; } }
   </style>
@@ -193,7 +201,7 @@ export function generateHtml(report: ReconReport): string {
   </tbody></table>
 
   <h2>Phase 4 — Vulnerability Intelligence</h2>
-  <table><thead><tr><th>CVE</th><th>Severity</th><th>Technology</th><th>CVSS</th><th>Description</th></tr></thead><tbody>${vulnRows}</tbody></table>
+  <table><thead><tr><th>CVE</th><th>Severity</th><th>Technology</th><th>CVSS</th><th>Description</th><th>Remediation</th></tr></thead><tbody>${vulnRows}</tbody></table>
 
   <h2>Phase 5 — Intelligence Synthesis</h2>
   ${synthesisBlocks}

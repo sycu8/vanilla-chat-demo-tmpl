@@ -9,6 +9,7 @@
  */
 
 import { createRng, domainSeed, extractDomain } from "../lib/domain";
+import { matchVulnerabilities } from "../lib/cve";
 import { buildMindmap } from "../lib/mindmap";
 import { enrichReport } from "../lib/report";
 import { enumerateSubdomains, enumerateSubdomainsStream } from "./subdomain";
@@ -35,19 +36,6 @@ const PHASES = [
 ];
 
 const OSINT_JOB_TECH = ["React", "Next.js", "Django", "Laravel", "Express", "Spring Boot", "Kubernetes"];
-
-const CVE_DB: (Omit<Vulnerability, "technology"> & { tags: string[] })[] = [
-  { cve: "CVE-2023-44487", severity: "high", description: "HTTP/2 Rapid Reset attack", cvss: 7.5, tags: ["cloudflare", "nginx", "next.js", "http"] },
-  { cve: "CVE-2024-23897", severity: "high", description: "Jenkins arbitrary file read", cvss: 9.8, tags: ["jenkins"] },
-  { cve: "CVE-2023-22515", severity: "medium", description: "Atlassian Confluence broken access control", cvss: 7.3, tags: ["confluence", "atlassian"] },
-  { cve: "CVE-2024-27198", severity: "high", description: "JetBrains TeamCity auth bypass", cvss: 9.8, tags: ["teamcity", "jetbrains"] },
-  { cve: "CVE-2023-7028", severity: "info", description: "GitLab account takeover via password reset", cvss: 6.5, tags: ["gitlab"] },
-  { cve: "CVE-2023-4966", severity: "high", description: "Citrix Bleed sensitive info disclosure", cvss: 9.4, tags: ["citrix"] },
-  { cve: "CVE-2024-3400", severity: "high", description: "Palo Alto PAN-OS command injection", cvss: 10.0, tags: ["palo", "pan-os"] },
-  { cve: "CVE-2023-38545", severity: "medium", description: "curl SOCKS5 heap buffer overflow", cvss: 7.5, tags: ["curl"] },
-  { cve: "CVE-2024-1086", severity: "medium", description: "Linux kernel netfilter use-after-free", cvss: 7.8, tags: ["linux"] },
-  { cve: "CVE-2024-21413", severity: "medium", description: "Microsoft Outlook MonikerLink RCE", cvss: 8.8, tags: ["microsoft", "exchange"] },
-];
 
 const PHISHING_LURES = [
   "IT password reset — urgent action required",
@@ -126,47 +114,6 @@ function generateOsint(
   return findings;
 }
 
-function stackLabel(fp: TechFingerprint): string {
-  return [fp.framework, fp.cms, fp.server, fp.version].filter(Boolean).join(" / ") || "Unknown Stack";
-}
-
-function stackHaystack(fp: TechFingerprint): string {
-  return `${fp.host} ${stackLabel(fp)} ${fp.headers.join(" ")}`.toLowerCase();
-}
-
-function matchVulnerabilities(
-  fingerprints: TechFingerprint[],
-  depth: ScanDepth
-): Vulnerability[] {
-  const max = depth === "deep" ? 10 : 6;
-  const matched: Vulnerability[] = [];
-  const seen = new Set<string>();
-
-  for (const fp of fingerprints) {
-    const haystack = stackHaystack(fp);
-    const tech = stackLabel(fp);
-
-    for (const entry of CVE_DB) {
-      if (seen.has(entry.cve)) continue;
-      const hit = entry.tags.some((tag) => haystack.includes(tag));
-      if (hit) {
-        const { tags: _tags, ...cve } = entry;
-        matched.push({ ...cve, technology: tech });
-        seen.add(entry.cve);
-      }
-    }
-  }
-
-  // HTTP/2 Rapid Reset applies to any live HTTPS web stack behind Cloudflare/modern servers
-  if (!seen.has("CVE-2023-44487") && fingerprints.length) {
-    const fp = fingerprints[0];
-    const { tags: _tags, ...cve } = CVE_DB[0];
-    matched.push({ ...cve, technology: stackLabel(fp) });
-  }
-
-  return matched.slice(0, max);
-}
-
 function calculateRiskScore(vulns: Vulnerability[], subdomains: SubdomainEntry[]): number {
   let score = 0;
   for (const v of vulns) {
@@ -206,7 +153,7 @@ function generateSynthesis(
     },
     {
       title: "Critical Vulnerability Exposure",
-      detail: `${highVulns} critical/high CVEs matched against detected technology stack. Immediate patching recommended for internet-facing services.`,
+      detail: `${highVulns} critical/high CVEs matched against detected technology stack. See Phase 4 remediation steps for each finding.`,
       priority: highVulns > 2 ? "high" : "medium",
     },
     {
@@ -396,6 +343,10 @@ export async function* runReconScan(
         vuln.severity === "high" ? "error" : vuln.severity === "medium" ? "warn" : "info",
         `${vuln.cve} [CVSS ${vuln.cvss}] on ${vuln.technology}: ${vuln.description}`
       ),
+    };
+    yield {
+      type: "log",
+      data: log(4, "success", `  ↳ Remediation: ${vuln.remediation}`),
     };
     await delay(200);
   }

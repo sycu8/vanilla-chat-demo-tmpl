@@ -85,6 +85,12 @@ async function testReport() {
   }
   ok(`fingerprints (${fps.length} hosts, root=${rootStack.trim()})`);
 
+  if (!report.vulnerabilities?.length) return fail("cve", "no vulnerabilities in report");
+  const missingFix = report.vulnerabilities.find((v) => !v.remediation?.trim());
+  if (missingFix) return fail("cve", `${missingFix.cve} missing remediation`);
+  if (!report.markdown.includes("Remediation:")) return fail("cve", "markdown missing remediation section");
+  ok(`CVE remediations (${report.vulnerabilities.length} with fix suggestions)`);
+
   return report;
 }
 

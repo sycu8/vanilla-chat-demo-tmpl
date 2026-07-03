@@ -46,6 +46,8 @@ export interface Vulnerability {
   technology: string;
   description: string;
   cvss: number;
+  /** Actionable remediation / mitigation steps */
+  remediation: string;
 }
 
 export interface SynthesisInsight {
