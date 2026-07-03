@@ -3,6 +3,7 @@
  */
 
 import type { ReconReport, RiskLevel } from "./types";
+import { groupVulnerabilitiesByHost } from "./cve";
 
 function riskBadge(level: RiskLevel): string {
   const colors: Record<RiskLevel, string> = {
@@ -70,8 +71,21 @@ export function generateMarkdown(report: ReconReport): string {
   }
 
   lines.push(`## Phase 4: Vulnerability Intelligence`, ``);
+
+  const vulnerableHosts = groupVulnerabilitiesByHost(report.vulnerabilities);
+  if (vulnerableHosts.length) {
+    lines.push(`### Vulnerable Subdomains`, ``);
+    lines.push(`| Host | CVEs | Max Severity |`);
+    lines.push(`|------|------|--------------|`);
+    for (const row of vulnerableHosts) {
+      lines.push(`| ${row.host} | ${row.cves.join(", ")} | ${row.maxSeverity.toUpperCase()} |`);
+    }
+    lines.push(``);
+  }
+
   for (const v of report.vulnerabilities) {
     lines.push(`### ${v.cve} — ${v.severity.toUpperCase()} (CVSS ${v.cvss})`);
+    lines.push(`- **Host:** ${v.host}`);
     lines.push(`- **Technology:** ${v.technology}`);
     lines.push(`- **Description:** ${v.description}`);
     lines.push(`- **Remediation:** ${v.remediation}`);
@@ -114,11 +128,19 @@ export function generateHtml(report: ReconReport): string {
         `<tr>
           <td><code>${v.cve}</code></td>
           <td>${riskBadge(v.severity)}</td>
+          <td><code>${v.host}</code></td>
           <td>${v.technology}</td>
           <td>${v.cvss}</td>
           <td>${v.description}</td>
           <td class="remediation">${v.remediation}</td>
         </tr>`
+    )
+    .join("");
+
+  const vulnerableHostRows = groupVulnerabilitiesByHost(report.vulnerabilities)
+    .map(
+      (row) =>
+        `<tr><td><code>${row.host}</code></td><td>${row.cves.map((c) => `<code>${c}</code>`).join(", ")}</td><td>${riskBadge(row.maxSeverity)}</td></tr>`
     )
     .join("");
 
@@ -201,7 +223,10 @@ export function generateHtml(report: ReconReport): string {
   </tbody></table>
 
   <h2>Phase 4 — Vulnerability Intelligence</h2>
-  <table><thead><tr><th>CVE</th><th>Severity</th><th>Technology</th><th>CVSS</th><th>Description</th><th>Remediation</th></tr></thead><tbody>${vulnRows}</tbody></table>
+  <h3>Vulnerable Subdomains</h3>
+  <table><thead><tr><th>Host</th><th>CVEs</th><th>Max Severity</th></tr></thead><tbody>${vulnerableHostRows}</tbody></table>
+  <h3>CVE Details</h3>
+  <table><thead><tr><th>CVE</th><th>Severity</th><th>Host</th><th>Technology</th><th>CVSS</th><th>Description</th><th>Remediation</th></tr></thead><tbody>${vulnRows}</tbody></table>
 
   <h2>Phase 5 — Intelligence Synthesis</h2>
   ${synthesisBlocks}

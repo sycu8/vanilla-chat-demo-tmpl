@@ -251,7 +251,7 @@ function resetSubdomainList() {
   if (subdomainList) {
     subdomainList.innerHTML = `
       <tr id="subdomain-empty-row">
-        <td colspan="4" class="p-4 text-center text-forge-muted">Subdomains will appear during Phase 2...</td>
+        <td colspan="5" class="p-4 text-center text-forge-muted">Subdomains will appear during Phase 2...</td>
       </tr>`;
   }
 }
@@ -261,6 +261,46 @@ function statusClass(code) {
   if (code >= 200 && code < 400) return "text-forge-safe";
   if (code >= 400 && code < 500) return "text-forge-warn";
   return "text-forge-danger";
+}
+
+function buildVulnMap(vulnerabilities) {
+  const map = new Map();
+  for (const vuln of vulnerabilities || []) {
+    const list = map.get(vuln.host) || [];
+    list.push(vuln);
+    map.set(vuln.host, list);
+  }
+  return map;
+}
+
+function formatHostCves(host, vulnMap) {
+  const vulns = vulnMap?.get(host) || [];
+  if (!vulns.length) return `<span class="text-forge-muted">—</span>`;
+  return vulns
+    .slice(0, 3)
+    .map((v) => {
+      const color =
+        v.severity === "high" ? "text-forge-danger" :
+        v.severity === "medium" ? "text-forge-warn" : "text-forge-muted";
+      return `<span class="${color}" title="${escapeHtml(v.description)}">${escapeHtml(v.cve)}</span>`;
+    })
+    .join(", ");
+}
+
+function redrawSubdomainTable(vulnMap = buildVulnMap(currentReport?.vulnerabilities)) {
+  if (!subdomainList) return;
+  subdomainList.innerHTML = liveSubdomains
+    .map(
+      (s) => `
+    <tr class="border-t border-forge-border/50 hover:bg-forge-surface/50">
+      <td class="p-2 text-forge-accent2">${escapeHtml(s.host)}</td>
+      <td class="p-2 text-forge-muted">${escapeHtml(s.ip)}</td>
+      <td class="p-2 ${statusClass(s.status)}">${s.status || "DNS"}</td>
+      <td class="p-2 text-forge-muted">${escapeHtml((s.services || []).join(", "))}</td>
+      <td class="p-2 text-xs">${formatHostCves(s.host, vulnMap)}</td>
+    </tr>`
+    )
+    .join("");
 }
 
 function appendSubdomainRow(entry) {
@@ -273,36 +313,27 @@ function appendSubdomainRow(entry) {
 
   liveSubdomains.push(entry);
   liveSubdomains.sort((a, b) => a.host.localeCompare(b.host));
-
-  subdomainList.innerHTML = liveSubdomains
-    .map(
-      (s) => `
-    <tr class="border-t border-forge-border/50 hover:bg-forge-surface/50">
-      <td class="p-2 text-forge-accent2">${escapeHtml(s.host)}</td>
-      <td class="p-2 text-forge-muted">${escapeHtml(s.ip)}</td>
-      <td class="p-2 ${statusClass(s.status)}">${s.status || "DNS"}</td>
-      <td class="p-2 text-forge-muted">${escapeHtml((s.services || []).join(", "))}</td>
-    </tr>`
-    )
-    .join("");
+  redrawSubdomainTable();
 
   if (subdomainCount) {
     subdomainCount.textContent = `${liveSubdomains.length} host${liveSubdomains.length === 1 ? "" : "s"}`;
   }
 }
 
-function renderSubdomainTable(subdomains) {
+function renderSubdomainTable(subdomains, vulnerabilities) {
   if (!subdomains?.length) {
     resetSubdomainList();
     if (subdomainList) {
       subdomainList.innerHTML = `
-        <tr><td colspan="4" class="p-4 text-center text-forge-warn">No live subdomains found — try Deep Scan or check target DNS.</td></tr>`;
+        <tr><td colspan="5" class="p-4 text-center text-forge-warn">No live subdomains found — try Deep Scan or check target DNS.</td></tr>`;
     }
     return;
   }
-  liveSubdomains = [];
-  subdomainList.innerHTML = "";
-  for (const entry of subdomains) appendSubdomainRow(entry);
+  liveSubdomains = [...subdomains].sort((a, b) => a.host.localeCompare(b.host));
+  redrawSubdomainTable(buildVulnMap(vulnerabilities));
+  if (subdomainCount) {
+    subdomainCount.textContent = `${liveSubdomains.length} host${liveSubdomains.length === 1 ? "" : "s"}`;
+  }
 }
 
 function setProgress(pct) {
@@ -530,7 +561,7 @@ async function onScanComplete(slimReport) {
   }
 
   sectionMindmap.classList.remove("hidden");
-  renderSubdomainTable(currentReport.subdomains || liveSubdomains);
+  renderSubdomainTable(currentReport.subdomains || liveSubdomains, currentReport.vulnerabilities);
   await renderMindmap(currentReport.mindmap);
 
   sectionReport.classList.remove("hidden");
@@ -749,7 +780,7 @@ $("#btn-download-pdf").addEventListener("click", () => {
         doc.addPage();
         y = 20;
       }
-      const line = `${v.cve} [${v.severity.toUpperCase()}] CVSS ${v.cvss} — ${v.technology}`;
+      const line = `${v.cve} [${v.severity.toUpperCase()}] CVSS ${v.cvss} — ${v.host} (${v.technology})`;
       const wrapped = doc.splitTextToSize(line, 180);
       doc.text(wrapped, 14, y);
       y += wrapped.length * 4 + 2;

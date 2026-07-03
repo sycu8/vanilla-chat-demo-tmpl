@@ -70,9 +70,9 @@ export function buildMindmap(report: ReconReport): string {
   }
 
   lines.push("    Vulnerabilities");
-  for (const vuln of report.vulnerabilities.slice(0, 6)) {
+  for (const vuln of report.vulnerabilities.slice(0, 8)) {
     lines.push(
-      `      ${riskEmoji(vuln.severity)} ${mermaidLabel(`${vuln.cve} ${vuln.technology}`)}`
+      `      ${riskEmoji(vuln.severity)} ${mermaidLabel(`${vuln.cve} @ ${vuln.host}`)}`
     );
   }
 
@@ -100,7 +100,7 @@ export function regenerateMindmap(
 
   lines.push(`    High Risk ${riskEmoji("high")}`);
   for (const v of highVulns.slice(0, 4)) {
-    lines.push(`      ${mermaidLabel(`${v.cve} on ${v.technology}`)}`);
+    lines.push(`      ${mermaidLabel(`${v.cve} @ ${v.host}`)}`);
   }
 
   lines.push(`    Medium Risk ${riskEmoji("medium")}`);

@@ -43,6 +43,8 @@ export interface TechFingerprint {
 export interface Vulnerability {
   cve: string;
   severity: RiskLevel;
+  /** Subdomain / host where the vulnerable stack was detected */
+  host: string;
   technology: string;
   description: string;
   cvss: number;

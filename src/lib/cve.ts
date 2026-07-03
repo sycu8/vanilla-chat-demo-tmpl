@@ -1,5 +1,6 @@
 /**
  * Curated CVE catalog with remediation guidance.
+ * CVEs are matched per subdomain based on live technology fingerprints.
  */
 
 import type { ScanDepth, TechFingerprint, Vulnerability } from "./types";
@@ -73,7 +74,7 @@ export const CVE_CATALOG: CveCatalogEntry[] = [
     severity: "high",
     description: "Palo Alto PAN-OS GlobalProtect command injection",
     cvss: 10.0,
-    tags: ["palo", "pan-os"],
+    tags: ["palo", "pan-os", "globalprotect"],
     remediation:
       "Upgrade PAN-OS to vendor-fixed release. Restrict GlobalProtect portal to managed devices. Hunt for IoCs (unusual cron jobs, unknown admin users) and rotate firewall management credentials.",
   },
@@ -100,7 +101,7 @@ export const CVE_CATALOG: CveCatalogEntry[] = [
     severity: "medium",
     description: "Microsoft Outlook MonikerLink remote code execution",
     cvss: 8.8,
-    tags: ["microsoft", "exchange", "outlook"],
+    tags: ["microsoft", "exchange", "outlook", "owa"],
     remediation:
       "Apply Microsoft security updates for Office/Outlook. Block suspicious external MonikerLink handlers via email gateway rules. Run phishing awareness training focused on calendar/meeting invite lures.",
   },
@@ -124,43 +125,93 @@ export const CVE_CATALOG: CveCatalogEntry[] = [
   },
 ];
 
+const SEVERITY_RANK: Record<Vulnerability["severity"], number> = {
+  high: 0,
+  medium: 1,
+  info: 2,
+};
+
 function stackLabel(fp: TechFingerprint): string {
   return [fp.framework, fp.cms, fp.server, fp.version].filter(Boolean).join(" / ") || "Unknown Stack";
 }
 
-function stackHaystack(fp: TechFingerprint): string {
-  return `${fp.host} ${stackLabel(fp)} ${fp.headers.join(" ")}`.toLowerCase();
+function hostLabels(host: string, domain: string): string {
+  if (host === domain) return "root www apex";
+  const suffix = `.${domain}`;
+  if (!host.endsWith(suffix)) return host;
+  return host.slice(0, -suffix.length).replace(/\./g, " ");
 }
 
-/** Match CVEs to detected technology stack and attach remediation guidance. */
+function matchHaystack(fp: TechFingerprint, domain: string): string {
+  return `${fp.host} ${hostLabels(fp.host, domain)} ${stackLabel(fp)} ${fp.headers.join(" ")}`.toLowerCase();
+}
+
+function cveMatchesHost(entry: CveCatalogEntry, haystack: string): boolean {
+  return entry.tags.some((tag) => haystack.includes(tag));
+}
+
+function sortVulnerabilities(vulns: Vulnerability[]): Vulnerability[] {
+  return [...vulns].sort((a, b) => {
+    const sr = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+    if (sr !== 0) return sr;
+    if (b.cvss !== a.cvss) return b.cvss - a.cvss;
+    return a.host.localeCompare(b.host) || a.cve.localeCompare(b.cve);
+  });
+}
+
+export interface VulnerableHostSummary {
+  host: string;
+  cves: string[];
+  maxSeverity: Vulnerability["severity"];
+}
+
+/** Group CVE findings by affected subdomain for reports and UI. */
+export function groupVulnerabilitiesByHost(vulnerabilities: Vulnerability[]): VulnerableHostSummary[] {
+  const byHost = new Map<string, Vulnerability[]>();
+
+  for (const vuln of vulnerabilities) {
+    const list = byHost.get(vuln.host) || [];
+    list.push(vuln);
+    byHost.set(vuln.host, list);
+  }
+
+  return [...byHost.entries()]
+    .map(([host, vulns]) => {
+      const sorted = sortVulnerabilities(vulns);
+      return {
+        host,
+        cves: sorted.map((v) => v.cve),
+        maxSeverity: sorted[0].severity,
+      };
+    })
+    .sort((a, b) => SEVERITY_RANK[a.maxSeverity] - SEVERITY_RANK[b.maxSeverity] || a.host.localeCompare(b.host));
+}
+
+/** Match CVEs to each fingerprinted subdomain (not just the first global hit). */
 export function matchVulnerabilities(
   fingerprints: TechFingerprint[],
-  depth: ScanDepth
+  depth: ScanDepth,
+  domain?: string
 ): Vulnerability[] {
-  const max = depth === "deep" ? 10 : 6;
+  const max = depth === "deep" ? 30 : 18;
   const matched: Vulnerability[] = [];
   const seen = new Set<string>();
+  const apex = domain || fingerprints[0]?.host || "";
 
   for (const fp of fingerprints) {
-    const haystack = stackHaystack(fp);
+    const haystack = matchHaystack(fp, apex);
     const tech = stackLabel(fp);
 
     for (const entry of CVE_CATALOG) {
-      if (seen.has(entry.cve)) continue;
-      const hit = entry.tags.some((tag) => haystack.includes(tag));
-      if (hit) {
-        const { tags: _tags, ...cve } = entry;
-        matched.push({ ...cve, technology: tech });
-        seen.add(entry.cve);
-      }
+      const key = `${entry.cve}:${fp.host}`;
+      if (seen.has(key)) continue;
+      if (!cveMatchesHost(entry, haystack)) continue;
+
+      const { tags: _tags, ...cve } = entry;
+      matched.push({ ...cve, host: fp.host, technology: tech });
+      seen.add(key);
     }
   }
 
-  // HTTP/2 Rapid Reset applies to most modern HTTPS stacks on Cloudflare
-  if (!seen.has("CVE-2023-44487") && fingerprints.length) {
-    const { tags: _tags, ...cve } = CVE_CATALOG[0];
-    matched.push({ ...cve, technology: stackLabel(fingerprints[0]) });
-  }
-
-  return matched.slice(0, max);
+  return sortVulnerabilities(matched).slice(0, max);
 }

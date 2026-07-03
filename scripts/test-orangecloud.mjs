@@ -86,10 +86,22 @@ async function testReport() {
   ok(`fingerprints (${fps.length} hosts, root=${rootStack.trim()})`);
 
   if (!report.vulnerabilities?.length) return fail("cve", "no vulnerabilities in report");
+  const missingHost = report.vulnerabilities.find((v) => !v.host?.trim());
+  if (missingHost) return fail("cve", `${missingHost.cve} missing host`);
   const missingFix = report.vulnerabilities.find((v) => !v.remediation?.trim());
   if (missingFix) return fail("cve", `${missingFix.cve} missing remediation`);
   if (!report.markdown.includes("Remediation:")) return fail("cve", "markdown missing remediation section");
-  ok(`CVE remediations (${report.vulnerabilities.length} with fix suggestions)`);
+  if (!report.markdown.includes("Vulnerable Subdomains")) return fail("cve", "markdown missing vulnerable subdomain mapping");
+
+  const blogVulns = report.vulnerabilities.filter((v) => v.host === "blog.orangecloud.vn");
+  const kbVulns = report.vulnerabilities.filter((v) => v.host === "kb.orangecloud.vn");
+  const nextHosts = new Set([...blogVulns, ...kbVulns].map((v) => v.host));
+  if (nextHosts.size > 0) {
+    const hasNextCve = [...blogVulns, ...kbVulns].some((v) => v.cve.startsWith("CVE-2024-"));
+    if (!hasNextCve) return fail("cve", "expected Next.js CVEs on blog/kb subdomains");
+  }
+
+  ok(`CVE remediations (${report.vulnerabilities.length} findings on ${new Set(report.vulnerabilities.map((v) => v.host)).size} hosts)`);
 
   return report;
 }

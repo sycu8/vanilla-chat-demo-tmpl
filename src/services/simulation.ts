@@ -153,7 +153,7 @@ function generateSynthesis(
     },
     {
       title: "Critical Vulnerability Exposure",
-      detail: `${highVulns} critical/high CVEs matched against detected technology stack. See Phase 4 remediation steps for each finding.`,
+      detail: `${highVulns} critical/high CVE findings across ${new Set(vulns.filter((v) => v.severity === "high").map((v) => v.host)).size} vulnerable host(s). See Phase 4 for per-subdomain remediation.`,
       priority: highVulns > 2 ? "high" : "medium",
     },
     {
@@ -336,14 +336,14 @@ export async function* runReconScan(
   yield { type: "log", data: log(4, "info", "Cross-referencing tech stack against CVE databases (NVD, OSV)...") };
   await delay(450);
 
-  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth);
+  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, domain);
   for (const vuln of vulnerabilities) {
     yield {
       type: "log",
       data: log(
         4,
         vuln.severity === "high" ? "error" : vuln.severity === "medium" ? "warn" : "info",
-        `${vuln.cve} [CVSS ${vuln.cvss}] on ${vuln.technology}: ${vuln.description}`
+        `${vuln.cve} [CVSS ${vuln.cvss}] on ${vuln.host} (${vuln.technology}): ${vuln.description}`
       ),
     };
     yield {
@@ -428,7 +428,7 @@ export async function buildReportFromRequest(request: ScanRequest): Promise<Reco
     subdomains.map((s) => s.host),
     request.depth
   );
-  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth);
+  const vulnerabilities = matchVulnerabilities(fingerprints, request.depth, domain);
   const riskScore = calculateRiskScore(vulnerabilities, subdomains);
   const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "info";
   const synthesis = generateSynthesis(domain, osint, subdomains, vulnerabilities, riskScore, rng);
