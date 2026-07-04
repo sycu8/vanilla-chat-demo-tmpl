@@ -65,6 +65,10 @@ async function testReport() {
   }
   const fakeOnly = hosts.every((h) => /^(api|admin|jenkins|grafana)\./.test(h));
   if (fakeOnly) return fail("report", "subdomains look simulated, not live");
+
+  const bruteForceOnly = ["ns1.orangecloud.vn", "portal.orangecloud.vn", "jenkins.orangecloud.vn"];
+  const spurious = bruteForceOnly.filter((h) => hosts.includes(h));
+  if (spurious.length) return fail("report", `wordlist false positives detected: ${spurious.join(", ")}`);
   for (const sub of report.subdomains) {
     if (!sub.ip || sub.ip === "0.0.0.0") return fail("report", `${sub.host} missing IP`);
   }

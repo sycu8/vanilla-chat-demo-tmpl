@@ -307,7 +307,7 @@ export async function* runReconScan(
     type: "phase",
     data: { phase: 2, name: PHASES[1].name, status: "running", progress: 20, detail: "Starting live subdomain enumeration..." },
   };
-  yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (CT logs, certspotter, passive DNS, wordlist)...") };
+  yield { type: "log", data: log(2, "info", "[LIVE] Starting subdomain enumeration (CT, certspotter, passive DNS, wayback)...") };
 
   const subdomains: SubdomainEntry[] = [];
   for await (const event of enumerateSubdomainsStream(domain, { depth: request.depth })) {

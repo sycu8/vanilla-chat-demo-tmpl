@@ -1,6 +1,7 @@
 /**
- * Live subdomain enumeration — Certificate Transparency + passive DNS + wordlist brute force.
- * Runs on Cloudflare Workers (fetch-only, no shell tools).
+ * Live subdomain enumeration — passive sources only (CT, CertSpotter, passive DNS, Wayback).
+ * Only returns hosts discovered in historical/intelligence sources that still resolve in DNS.
+ * No DNS wordlist brute force or synthetic permutations (avoids wildcard-DNS false positives).
  */
 
 import type { ScanDepth, SubdomainEntry } from "../lib/types";
@@ -14,7 +15,6 @@ const DNS_PROVIDERS = [
   "https://dns.google/resolve",
 ];
 
-/** Tunable discovery timeouts (ms) */
 const TIMEOUTS = {
   crtSh: 45_000,
   certSpotter: 25_000,
@@ -25,14 +25,8 @@ const TIMEOUTS = {
 };
 
 const LIMITS = {
-  quick: { maxAlive: 60, maxCandidates: 220, concurrency: 10, httpProbe: true },
-  deep: { maxAlive: 120, maxCandidates: 400, concurrency: 12, httpProbe: true },
-};
-
-/** Extra headroom when the user scans an apex/root domain (not a single subdomain). */
-const ROOT_DOMAIN_BONUS = {
-  quick: { maxCandidates: 80, bruteLabels: 140 },
-  deep: { maxCandidates: 150, bruteLabels: 220 },
+  quick: { maxAlive: 80, maxCandidates: 300, concurrency: 10, httpProbe: true },
+  deep: { maxAlive: 150, maxCandidates: 500, concurrency: 12, httpProbe: true },
 };
 
 const TWO_PART_TLDS = new Set([
@@ -45,198 +39,6 @@ const TWO_PART_TLDS = new Set([
   "ac.uk",
   "gov.uk",
 ]);
-
-/** High-yield labels for DNS brute force on apex domains */
-const BRUTE_FORCE_LABELS = [
-  "www",
-  "mail",
-  "webmail",
-  "smtp",
-  "pop",
-  "imap",
-  "mx",
-  "mx1",
-  "mx2",
-  "ns",
-  "ns1",
-  "ns2",
-  "dns",
-  "dns1",
-  "dns2",
-  "api",
-  "api2",
-  "api-v2",
-  "admin",
-  "administrator",
-  "panel",
-  "cpanel",
-  "whm",
-  "app",
-  "apps",
-  "portal",
-  "dashboard",
-  "console",
-  "manage",
-  "backend",
-  "frontend",
-  "dev",
-  "development",
-  "staging",
-  "stage",
-  "uat",
-  "qa",
-  "test",
-  "testing",
-  "beta",
-  "alpha",
-  "demo",
-  "sandbox",
-  "preview",
-  "blog",
-  "news",
-  "cms",
-  "wiki",
-  "kb",
-  "docs",
-  "doc",
-  "help",
-  "support",
-  "status",
-  "cdn",
-  "static",
-  "assets",
-  "media",
-  "img",
-  "images",
-  "files",
-  "file",
-  "upload",
-  "downloads",
-  "storage",
-  "s3",
-  "git",
-  "gitlab",
-  "github",
-  "bitbucket",
-  "jenkins",
-  "ci",
-  "cd",
-  "build",
-  "deploy",
-  "registry",
-  "docker",
-  "k8s",
-  "kubernetes",
-  "grafana",
-  "prometheus",
-  "monitor",
-  "monitoring",
-  "metrics",
-  "log",
-  "logs",
-  "logging",
-  "elastic",
-  "kibana",
-  "sentry",
-  "auth",
-  "login",
-  "sso",
-  "oauth",
-  "identity",
-  "account",
-  "accounts",
-  "my",
-  "secure",
-  "ssl",
-  "vpn",
-  "remote",
-  "rdp",
-  "cloud",
-  "aws",
-  "azure",
-  "gcp",
-  "db",
-  "database",
-  "mysql",
-  "postgres",
-  "redis",
-  "mongo",
-  "search",
-  "shop",
-  "store",
-  "m",
-  "mobile",
-  "intranet",
-  "extranet",
-  "hr",
-  "crm",
-  "erp",
-  "sap",
-  "chat",
-  "meet",
-  "video",
-  "stream",
-  "live",
-  "forum",
-  "community",
-  "ask",
-  "onboarding",
-  "onboarding-uat",
-  "omc",
-  "mcp",
-  "mcp-workers",
-  "bhxh",
-  "stocknews",
-  "wcstat",
-  "wcstat-uat",
-  "yo",
-  "rag-test",
-  "autodiscover",
-  "owa",
-  "exchange",
-  "calendar",
-  "drive",
-  "share",
-  "old",
-  "new",
-  "v1",
-  "v2",
-  "v3",
-  "internal",
-  "external",
-  "public",
-  "private",
-  "proxy",
-  "gateway",
-  "lb",
-  "loadbalancer",
-  "origin",
-  "edge",
-  "worker",
-  "workers",
-  "service",
-  "services",
-  "micro",
-  "microservice",
-  "web",
-  "web1",
-  "web2",
-  "server",
-  "host",
-  "node",
-  "cluster",
-  "backup",
-  "bak",
-  "archive",
-  "legacy",
-  "prod",
-  "production",
-  "preprod",
-  "pre-prod",
-  "canary",
-  "release",
-  "rc",
-];
 
 const SERVICE_HINTS: Record<string, string[]> = {
   api: ["REST API", "HTTPS"],
@@ -292,6 +94,19 @@ function inferServices(host: string, domain: string): string[] {
   return SERVICE_HINTS[label] || ["HTTPS", "HTTP"];
 }
 
+/** RFC 1035-ish hostname validation */
+function isValidSubdomainHost(host: string): boolean {
+  if (!host || host.length > 253) return false;
+  const labels = host.split(".");
+  if (labels.length < 2) return false;
+  return labels.every(
+    (label) =>
+      label.length >= 1 &&
+      label.length <= 63 &&
+      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(label)
+  );
+}
+
 function normalizeHost(value: string, domain: string): string | null {
   let host = value.trim().toLowerCase();
   if (!host) return null;
@@ -300,6 +115,7 @@ function normalizeHost(value: string, domain: string): string | null {
   if (host.startsWith("www.") && host === `www.${domain}`) return host;
   if (host.endsWith(`.${domain}`) || host === domain) {
     if (host.includes(" ") || host.includes("*") || host.includes(",")) return null;
+    if (!isValidSubdomainHost(host)) return null;
     return host;
   }
   return null;
@@ -345,7 +161,7 @@ function parseCertSpotterHosts(rows: unknown, domain: string): Set<string> {
 async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown | null> {
   try {
     const res = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "ReconForge/1.0" },
+      headers: { Accept: "application/json", "User-Agent": "ReconForge/2.0" },
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
@@ -379,12 +195,13 @@ async function fetchHackerTargetHosts(domain: string): Promise<Set<string>> {
   const url = `${HACKERTARGET_URL}?q=${encodeURIComponent(domain)}`;
   try {
     const res = await fetch(url, {
-      headers: { "User-Agent": "ReconForge/1.0" },
+      headers: { "User-Agent": "ReconForge/2.0" },
       signal: AbortSignal.timeout(TIMEOUTS.hackerTarget),
     });
     if (!res.ok) return new Set();
     const text = await res.text();
     if (text.toLowerCase().includes("error") && text.length < 120) return new Set();
+    if (text.toLowerCase().includes("api count exceeded")) return new Set();
     return parseHackerTargetHosts(text, domain);
   } catch {
     return new Set();
@@ -417,41 +234,6 @@ async function fetchWaybackHosts(domain: string, limit: number): Promise<Set<str
   return parseWaybackHosts(data, domain);
 }
 
-/** Subfinder-style permutations from discovered labels (api-dev, dev-api, etc.) */
-function buildPermutationHosts(passive: Set<string>, apex: string, limit: number): Set<string> {
-  const hosts = new Set<string>();
-  const labels = new Set<string>();
-  const prefixes = ["dev", "staging", "uat", "test", "beta", "old", "new", "v2", "internal"];
-
-  for (const host of passive) {
-    if (host === apex) continue;
-    const sub = host.endsWith(`.${apex}`) ? host.slice(0, -(apex.length + 1)) : "";
-    const base = sub.includes(".") ? sub.split(".")[0] : sub;
-    if (base && base.length >= 2 && base.length <= 20) labels.add(base);
-  }
-
-  for (const label of labels) {
-    for (const prefix of prefixes) {
-      if (hosts.size >= limit) return hosts;
-      const combined = normalizeHost(`${prefix}-${label}.${apex}`, apex);
-      if (combined) hosts.add(combined);
-      const reversed = normalizeHost(`${label}-${prefix}.${apex}`, apex);
-      if (reversed) hosts.add(reversed);
-    }
-  }
-
-  return hosts;
-}
-
-function buildBruteForceHosts(apex: string, labelLimit: number): Set<string> {
-  const hosts = new Set<string>();
-  for (const label of BRUTE_FORCE_LABELS.slice(0, labelLimit)) {
-    const host = normalizeHost(`${label}.${apex}`, apex);
-    if (host) hosts.add(host);
-  }
-  return hosts;
-}
-
 async function resolveDns(host: string): Promise<string | null> {
   for (const base of DNS_PROVIDERS) {
     for (const type of ["A", "AAAA", "CNAME"] as const) {
@@ -481,7 +263,7 @@ async function probeHttp(host: string): Promise<number> {
         method,
         redirect: "manual",
         signal: AbortSignal.timeout(TIMEOUTS.http),
-        headers: { "User-Agent": "ReconForge/1.0" },
+        headers: { "User-Agent": "ReconForge/2.0" },
       });
       if (res.status > 0) return res.status;
     } catch {
@@ -491,12 +273,11 @@ async function probeHttp(host: string): Promise<number> {
   return 0;
 }
 
-function sortHosts(hosts: string[], domain: string, passiveFirst: Set<string>): string[] {
+function sortHosts(hosts: string[], domain: string): string[] {
   const rank = (host: string) => {
     if (host === domain) return 0;
     if (host === `www.${domain}`) return 1;
-    if (passiveFirst.has(host)) return 2;
-    return 3;
+    return 2;
   };
   return [...hosts].sort((a, b) => {
     const dr = rank(a) - rank(b);
@@ -556,32 +337,14 @@ export type SubdomainStreamEvent =
   | { kind: "progress"; current: number; total: number; host: string; state: "checking" | "alive" | "dead" }
   | { kind: "verified"; entry: SubdomainEntry };
 
-/** Stream subdomain discovery with incremental progress events. */
-export async function* enumerateSubdomainsStream(
-  domain: string,
-  options: Pick<EnumerateOptions, "depth">
-): AsyncGenerator<SubdomainStreamEvent> {
-  const apex = getApexDomain(domain);
-  const scanApex = isApexDomain(domain);
-  const baseLimits = options.depth === "deep" ? LIMITS.deep : LIMITS.quick;
-  const rootBonus = options.depth === "deep" ? ROOT_DOMAIN_BONUS.deep : ROOT_DOMAIN_BONUS.quick;
-  const limits = {
-    ...baseLimits,
-    maxCandidates: baseLimits.maxCandidates + (scanApex ? rootBonus.maxCandidates : 0),
-  };
+/** Collect passive-only candidates from CT, CertSpotter, HackerTarget, and Wayback. */
+async function collectPassiveCandidates(
+  apex: string,
+  depth: ScanDepth
+): Promise<{ candidates: Set<string>; sourceCounts: Record<string, number> }> {
+  const candidates = new Set<string>([apex, `www.${apex}`]);
+  const waybackLimit = depth === "deep" ? 400 : 200;
 
-  const candidates = new Set<string>([domain, apex, `www.${apex}`]);
-  const passiveHosts = new Set<string>();
-
-  const sourceParts = ["crt.sh", "crt.sh wildcard", "certspotter", "passive DNS", "wayback"];
-  if (scanApex) sourceParts.push("DNS wordlist", "permutations");
-
-  yield {
-    kind: "status",
-    message: `Querying ${sourceParts.join(" + ")} for ${apex}${scanApex ? " (root domain — expanded discovery)" : ""}...`,
-  };
-
-  const waybackLimit = options.depth === "deep" ? 300 : 150;
   const [crtHosts, crtWildcardHosts, certSpotterHosts, htHosts, waybackHosts] = await Promise.all([
     fetchCrtShHosts(apex),
     fetchCrtShHosts(apex, true),
@@ -590,55 +353,63 @@ export async function* enumerateSubdomainsStream(
     fetchWaybackHosts(apex, waybackLimit),
   ]);
 
-  for (const host of crtHosts) {
-    candidates.add(host);
-    passiveHosts.add(host);
-  }
-  for (const host of crtWildcardHosts) {
-    candidates.add(host);
-    passiveHosts.add(host);
-  }
-  for (const host of certSpotterHosts) {
-    candidates.add(host);
-    passiveHosts.add(host);
-  }
-  for (const host of htHosts) {
-    candidates.add(host);
-    passiveHosts.add(host);
-  }
-  for (const host of waybackHosts) {
-    candidates.add(host);
-    passiveHosts.add(host);
-  }
+  for (const host of crtHosts) candidates.add(host);
+  for (const host of crtWildcardHosts) candidates.add(host);
+  for (const host of certSpotterHosts) candidates.add(host);
+  for (const host of htHosts) candidates.add(host);
+  for (const host of waybackHosts) candidates.add(host);
 
-  let bruteCount = 0;
-  let permCount = 0;
-  if (scanApex) {
-    const bruteHosts = buildBruteForceHosts(apex, rootBonus.bruteLabels);
-    bruteCount = bruteHosts.size;
-    for (const host of bruteHosts) candidates.add(host);
+  return {
+    candidates,
+    sourceCounts: {
+      crtSh: crtHosts.size,
+      crtWildcard: crtWildcardHosts.size,
+      certSpotter: certSpotterHosts.size,
+      hackerTarget: htHosts.size,
+      wayback: waybackHosts.size,
+    },
+  };
+}
 
-    const permLimit = options.depth === "deep" ? 80 : 40;
-    const permHosts = buildPermutationHosts(passiveHosts, apex, permLimit);
-    permCount = permHosts.size;
-    for (const host of permHosts) candidates.add(host);
-  }
+/** Stream subdomain discovery with incremental progress events. */
+export async function* enumerateSubdomainsStream(
+  domain: string,
+  options: Pick<EnumerateOptions, "depth">
+): AsyncGenerator<SubdomainStreamEvent> {
+  const apex = getApexDomain(domain);
+  const limits = options.depth === "deep" ? LIMITS.deep : LIMITS.quick;
+
+  // Always include the user's exact target if it's a valid in-scope host
+  const seedHosts = new Set<string>([apex, `www.${apex}`]);
+  const normalizedTarget = normalizeHost(extractTargetHost(domain), apex);
+  if (normalizedTarget) seedHosts.add(normalizedTarget);
+
+  yield {
+    kind: "status",
+    message: `Querying passive sources (crt.sh, certspotter, passive DNS, wayback) for ${apex}...`,
+  };
+
+  const { candidates: passiveCandidates, sourceCounts } = await collectPassiveCandidates(
+    apex,
+    options.depth
+  );
+
+  for (const host of seedHosts) passiveCandidates.add(host);
 
   yield {
     kind: "status",
     message:
-      `Sources: crt.sh=${crtHosts.size}, wildcard=${crtWildcardHosts.size}, ` +
-      `certspotter=${certSpotterHosts.size}, passive DNS=${htHosts.size}, wayback=${waybackHosts.size}` +
-      (scanApex ? `, wordlist=${bruteCount}, permutations=${permCount}` : "") +
-      ` → ${candidates.size} unique candidates`,
+      `Passive sources: crt.sh=${sourceCounts.crtSh}, wildcard=${sourceCounts.crtWildcard}, ` +
+      `certspotter=${sourceCounts.certSpotter}, passive DNS=${sourceCounts.hackerTarget}, ` +
+      `wayback=${sourceCounts.wayback} → ${passiveCandidates.size} unique candidates (no wordlist brute force)`,
   };
 
-  const sorted = sortHosts([...candidates], apex, passiveHosts).slice(0, limits.maxCandidates);
+  const sorted = sortHosts([...passiveCandidates], apex).slice(0, limits.maxCandidates);
   const total = sorted.length;
 
   yield {
     kind: "status",
-    message: `Verifying ${total} hosts (${limits.concurrency} parallel, DNS ${TIMEOUTS.dns / 1000}s, HTTP ${TIMEOUTS.http / 1000}s)...`,
+    message: `Verifying ${total} passive-sourced hosts (${limits.concurrency} parallel, DNS ${TIMEOUTS.dns / 1000}s)...`,
   };
 
   const alive: SubdomainEntry[] = [];
@@ -670,12 +441,16 @@ export async function* enumerateSubdomainsStream(
     }
   }
 
-  yield { kind: "status", message: `Enumeration complete — ${alive.length} live host(s) found` };
+  yield { kind: "status", message: `Enumeration complete — ${alive.length} verified live host(s) from passive sources` };
+}
+
+function extractTargetHost(domain: string): string {
+  return domain.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0] || domain;
 }
 
 /**
- * Discover subdomains from CT logs, verify DNS resolution, and probe HTTP status.
- * Only returns hosts that resolve in DNS (alive at the network layer).
+ * Discover subdomains from passive intelligence sources, verify DNS resolution.
+ * Only returns hosts with historical evidence (CT / passive DNS / archive) that still resolve.
  */
 export async function enumerateSubdomains(
   domain: string,
