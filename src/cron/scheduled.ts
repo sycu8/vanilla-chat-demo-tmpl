@@ -33,7 +33,7 @@ export async function scheduledScan(
       target: row.target,
       keywords: row.keywords ? row.keywords.split(",").map((k) => k.trim()).filter(Boolean) : [],
       depth: row.depth === "deep" ? "deep" : "quick",
-      simulation: row.simulation !== 0,
+      simulation: false,
       scope: deserializeScope(row.scope_include || "", row.scope_exclude || ""),
     };
 

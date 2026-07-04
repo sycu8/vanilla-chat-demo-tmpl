@@ -58,7 +58,7 @@ function parseScanRequest(body: unknown): ScanRequest | { error: string } {
     .filter(Boolean);
 
   const depth = raw.depth === "deep" ? "deep" : "quick";
-  const simulation = raw.simulation !== false;
+  const simulation = false;
   const scope = parseScope(raw);
 
   const scopeErr = validateScopeTarget(domain, scope);

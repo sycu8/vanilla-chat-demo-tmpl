@@ -362,11 +362,10 @@ function buildScanPayload() {
   const target = targetInput.value.trim();
   const keywords = $("#keywords").value.trim();
   const depth = document.querySelector('input[name="depth"]:checked')?.value || "quick";
-  const simulation = $("#simulation").checked;
   const scopeInclude = parseScopeList("#scope-include");
   const scopeExclude = parseScopeList("#scope-exclude");
 
-  const payload = { target, keywords, depth, simulation };
+  const payload = { target, keywords, depth, simulation: false };
   if (scopeInclude) payload.scopeInclude = scopeInclude;
   if (scopeExclude) payload.scopeExclude = scopeExclude;
   return payload;
@@ -531,17 +530,16 @@ targetInput.addEventListener("input", () => {
   }
 });
 
-// ── Simulation Badge ──────────────────────────────────────────────
-$("#simulation").addEventListener("change", (e) => {
-  if (e.target.checked) {
-    statusBadge.textContent = "● SIMULATION MODE";
-    statusBadge.className = "text-xs font-mono px-3 py-1 rounded-full bg-forge-safe/10 text-forge-safe border border-forge-safe/30";
-  } else {
-    statusBadge.textContent = "● LIVE MODE";
-    statusBadge.className = "text-xs font-mono px-3 py-1 rounded-full bg-forge-danger/10 text-forge-danger border border-forge-danger/30";
-    showToast("Live mode selected — ensure you have authorization", "warn");
-  }
-});
+// ── Live mode badge (always on) ───────────────────────────────────
+function setLiveModeBadge() {
+  if (!statusBadge) return;
+  statusBadge.textContent = "● LIVE MODE";
+  statusBadge.className =
+    "text-xs font-mono px-3 py-1 rounded-full bg-forge-accent/10 text-forge-accent border border-forge-accent/30";
+  statusBadge.title = "Live reconnaissance — real DNS, CT, and HTTP probes";
+}
+
+setLiveModeBadge();
 
 // ── Scan Launch ─────────────────────────────────────────────────────
 scanForm.addEventListener("submit", async (e) => {

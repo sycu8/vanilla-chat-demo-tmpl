@@ -12,7 +12,7 @@ const PAYLOAD = {
   target: TARGET,
   keywords: "orange,cloud,vietnam",
   depth: "quick",
-  simulation: true,
+  simulation: false,
 };
 
 let passed = 0;

@@ -32,8 +32,8 @@
         </div>
       </div>
       <div class="flex items-center gap-3">
-        <span id="status-badge" class="text-xs font-mono px-3 py-1 rounded-full bg-forge-safe/10 text-forge-safe border border-forge-safe/30">
-          ● SIMULATION MODE
+        <span id="status-badge" class="text-xs font-mono px-3 py-1 rounded-full bg-forge-accent/10 text-forge-accent border border-forge-accent/30">
+          ● LIVE MODE
         </span>
         <button id="btn-new-scan" class="forge-btn-secondary text-sm py-2 px-4 hidden" type="button">
           New Scan
@@ -111,13 +111,6 @@
                 </label>
               </div>
             </div>
-            <label class="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" id="simulation" name="simulation" checked class="accent-forge-accent w-4 h-4" />
-              <div>
-                <span class="text-sm font-medium">Enable Simulation Mode</span>
-                <p class="text-xs text-forge-muted">Social-engineering scenarios (live recon still runs)</p>
-              </div>
-            </label>
             <div>
               <label for="scope-include" class="block text-sm font-medium text-forge-text mb-1">Scope Include <span class="text-forge-muted font-normal">(optional, comma-separated)</span></label>
               <input type="text" id="scope-include" class="forge-input font-mono text-sm" placeholder="*.example.com, api.example.com" />
@@ -312,7 +305,7 @@
   <!-- ═══ FOOTER ═══ -->
   <footer class="border-t border-forge-border mt-16 py-6 text-center text-xs text-forge-muted">
     <p>ReconForge v2.0 — Built on <a href="https://developers.cloudflare.com/workers/" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Cloudflare Workers</a> + <a href="https://hono.dev" class="text-forge-accent2 hover:underline" target="_blank" rel="noopener">Hono</a></p>
-    <p class="mt-1">⚠️ For authorized security testing only. Simulation mode generates synthetic data.</p>
+    <p class="mt-1">⚠️ For authorized security testing only. All scans run in live mode against real targets.</p>
   </footer>
 
   <!-- Toast container -->
